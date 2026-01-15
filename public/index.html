@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>WRONG TURN 6 | STANYTZ</title>
+    <style>
+        :root { --red: #ff0000; --black: #000000; --gray: #111; }
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; user-select: none; font-family: -apple-system, sans-serif; }
+        body { background: var(--black); height: 100vh; display: flex; justify-content: center; align-items: center; overflow: hidden; }
+        .iphone { width: 375px; height: 780px; background: #080808; border-radius: 60px; border: 2px solid var(--red); position: relative; padding: 12px; box-shadow: 0 0 50px rgba(255, 0, 0, 0.4); }
+        .dynamic-island { width: 140px; height: 35px; background: #000; position: absolute; top: 15px; left: 50%; transform: translateX(-50%); border-radius: 20px; z-index: 100; border: 1px solid #222; }
+        .screen { background: #000; height: 100%; border-radius: 50px; display: flex; flex-direction: column; align-items: center; padding-top: 70px; }
+        h1 { color: var(--red); font-size: 28px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; }
+        p { color: #444; font-size: 11px; margin-bottom: 50px; }
+        input { width: 85%; padding: 20px; background: rgba(255, 255, 255, 0.05); border: 1px solid #222; border-radius: 20px; color: #fff; font-size: 18px; text-align: center; outline: none; margin-bottom: 25px; transition: 0.4s; }
+        input:focus { border-color: var(--red); box-shadow: 0 0 15px var(--red); }
+        .btn { width: 85%; padding: 20px; background: var(--red); color: #fff; border: none; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.3s; text-transform: uppercase; }
+        .btn:active { transform: scale(0.95); }
+        #pairCode { margin-top: 50px; font-size: 40px; font-weight: 900; color: #fff; text-shadow: 0 0 20px var(--red); letter-spacing: 10px; }
+        .home-bar { width: 120px; height: 4px; background: #fff; border-radius: 10px; position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); opacity: 0.1; }
+    </style>
+</head>
+<body oncontextmenu="return false;">
+    <div class="iphone">
+        <div class="dynamic-island"></div>
+        <div class="screen">
+            <h1>WRONG TURN 6</h1>
+            <p>DEVELOPER: STANYTZ</p>
+            <input type="text" id="num" placeholder="255618558502" autocomplete="off">
+            <button class="btn" onclick="getPair()">Get Pairing Code</button>
+            <div id="pairCode">---- ----</div>
+        </div>
+        <div class="home-bar"></div>
+    </div>
+    <script>
+        document.onkeydown = function(e) { if(e.keyCode == 123 || (e.ctrlKey && (e.keyCode == 85 || e.keyCode == 83 || e.keyCode == 67 || e.keyCode == 73))) return false; };
+        async function getPair() {
+            const num = document.getElementById('num').value;
+            const box = document.getElementById('pairCode');
+            if(!num) return; box.innerText = "WAIT";
+            try {
+                const res = await fetch(`/get-code?num=${num}`);
+                const data = await res.json();
+                box.innerText = data.code || "ERR";
+            } catch (e) { box.innerText = "FAIL"; }
+        }
+    </script>
+</body>
+</html>
