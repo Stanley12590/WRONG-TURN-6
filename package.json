@@ -1,0 +1,27 @@
+{
+  "name": "wrong-turn-6",
+  "version": "6.0.1",
+  "description": "Universal WhatsApp Engine by STANYTZ",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "latest",
+    "@adiwajshing/keyed-db": "latest",
+    "mongoose": "latest",
+    "pino": "^8.0.0",
+    "express": "^4.18.2",
+    "axios": "latest",
+    "cors": "latest",
+    "node-cron": "latest",
+    "qrcode-terminal": "^0.12.0",
+    "cheerio": "latest",
+    "fluent-ffmpeg": "latest"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "author": "STANYTZ",
+  "license": "MIT"
+}
