@@ -1,9 +1,9 @@
 {
   "name": "wrongturn6-live",
   "version": "6.0.0",
-  "main": "live-bot.js",
+  "main": "bot.js",
   "scripts": {
-    "start": "node live-bot.js",
+    "start": "node bot.js",
     "test": "echo \"Bot is working!\" && exit 0"
   },
   "dependencies": {
