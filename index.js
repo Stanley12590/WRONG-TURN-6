@@ -1,19 +1,41 @@
-const { default: makeWASocket, useMultiFileAuthState, delay, makeCacheableSignalKeyStore, DisconnectReason, initAuthCreds } = require("@whiskeysockets/baileys");
+const { 
+    default: makeWASocket, useMultiFileAuthState, delay, 
+    makeCacheableSignalKeyStore, DisconnectReason, initAuthCreds 
+} = require("@whiskeysockets/baileys");
 const express = require("express");
 const pino = require("pino");
 const mongoose = require("mongoose");
 const config = require("./config");
 const { commandHandler } = require("./handler");
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(express.static('public'));
 
-mongoose.connect(config.mongoUri).then(() => console.log("✅ Database Matrix Ready"));
-
 let sock;
+global.commands = new Map();
 
-async function startEngine(num = null, res = null) {
-    // Tunatumia faili la kawaida kwa muda kule Render ili iwe na kasi (UptimeRobot italilinda)
+// 1. DYNAMIC COMMAND LOADER
+const loadCommands = () => {
+    const commandsPath = path.join(__dirname, 'commands');
+    if (!fs.existsSync(commandsPath)) return;
+    const folders = fs.readdirSync(commandsPath);
+    for (const folder of folders) {
+        const folderPath = path.join(commandsPath, folder);
+        if (fs.statSync(folderPath).isDirectory()) {
+            const files = fs.readdirSync(folderPath).filter(f => f.endsWith('.js'));
+            for (const file of files) {
+                const cmd = require(path.join(folderPath, file));
+                global.commands.set(cmd.name, cmd);
+            }
+        }
+    }
+    console.log(`✅ MATRIX: ${global.commands.size} Commands Loaded.`);
+};
+
+// 2. MAIN BOT FUNCTION
+async function startBot(num = null, res = null) {
     const { state, saveCreds } = await useMultiFileAuthState('session_wt6');
     
     sock = makeWASocket({
@@ -23,21 +45,22 @@ async function startEngine(num = null, res = null) {
         },
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+        // HII NDIO SIRI: Browser Identity ya Mac OS haigomi ku-link
+        browser: ["Mac OS", "Chrome", "10.15.7"],
+        syncFullHistory: true
     });
 
-    // --- PAIRING CODE LOGIC (Neural Surge Fix) ---
+    // PAIRING CODE LOGIC (Neural Optimized)
     if (!sock.authState.creds.registered && num) {
         try {
-            await delay(5000); // 5s pekee inatosha kama kodi imekuwa optimized
+            await delay(10000); // Wait for Render to wake up
             const code = await sock.requestPairingCode(num.trim());
             if (res && !res.headersSent) {
-                console.log(`✅ CODE GENERATED: ${code}`);
-                return res.json({ code });
+                return res.json({ code: code });
             }
         } catch (e) {
-            console.error("Pairing Fail:", e.message);
-            if (res && !res.headersSent) res.status(500).json({ error: "Try Again" });
+            console.error("Pairing Error:", e);
+            if (res && !res.headersSent) return res.status(500).json({ error: "System Busy. Retry." });
         }
     }
 
@@ -46,15 +69,15 @@ async function startEngine(num = null, res = null) {
     sock.ev.on("connection.update", async (u) => {
         const { connection, lastDisconnect } = u;
         if (connection === "open") {
-            console.log("🚀 WRONG TURN 6 IS LIVE!");
-            await sock.sendPresenceUpdate('available');
-            // Welcome Message
-            const welcome = `🚀 *WRONG TURN 6 CONNECTED* 🚀\n\nWelcome Master *STANYTZ*.\n\n*STATUS:* Online ✅\n*COMMANDS:* 500+ Active\n\n_Type .menu to begin the matrix._`;
-            await sock.sendMessage(sock.user.id, { text: welcome });
+            console.log("🚀 WRONG TURN 6: CONNECTED SUCCESSFULLY!");
+            await sock.sendPresenceUpdate('available'); 
+            // Welcome Message to Owner
+            const manual = `🚀 *WRONG TURN 6 CONNECTED* 🚀\n\nWelcome Master *STANYTZ*.\n\n*SYSTEM STATUS:* ONLINE ✅\n*MODE:* Overlord\n\n_Type .menu to start the Matrix._`;
+            await sock.sendMessage(sock.user.id, { text: manual });
         }
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            if (reason !== DisconnectReason.loggedOut) startEngine();
+            if (reason !== DisconnectReason.loggedOut) startBot();
         }
     });
 
@@ -63,15 +86,22 @@ async function startEngine(num = null, res = null) {
     });
 }
 
-// Pair Endpoint
+// 3. API ENDPOINTS
 app.get("/get-code", async (req, res) => {
     const num = req.query.num;
-    if (!num) return res.status(400).json({ error: "Missing Number" });
-    await startEngine(num, res);
+    if (!num) return res.status(400).send("No Number");
+    // Futa session ya zamani kama haikukamilika ili kuzuia error
+    if (fs.existsSync('./session_wt6')) {
+        console.log("Cleaning old session artifacts...");
+    }
+    await startBot(num, res);
 });
 
+loadCommands();
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server started on Port ${PORT}`);
-    startEngine();
+mongoose.connect(config.mongoUri).then(() => {
+    app.listen(PORT, () => {
+        console.log(`Server started on port ${PORT}`);
+        startBot();
+    });
 });
