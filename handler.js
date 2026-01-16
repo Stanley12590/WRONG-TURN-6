@@ -1,6 +1,5 @@
 const config = require("./config");
 const { User } = require("./database");
-const axios = require("axios");
 
 const commandHandler = async (sock, msg) => {
     if (!msg.message) return;
@@ -9,7 +8,7 @@ const commandHandler = async (sock, msg) => {
     const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || "").trim();
     const isCmd = body.startsWith(config.prefix);
 
-    // 1. AUTO STATUS VIEW
+    // AUTO STATUS
     if (from === 'status@broadcast') {
         await sock.readMessages([msg.key]);
         return;
@@ -17,31 +16,35 @@ const commandHandler = async (sock, msg) => {
 
     if (msg.key.fromMe) return;
 
-    // 2. USER SETTINGS & REGISTRATION
+    // LOAD SETTINGS
     let user = await User.findOne({ id: sender }) || await User.create({ id: sender, name: msg.pushName });
 
-    // 3. ANTI-VIEWONCE BYPASS
-    if (user.antiViewOnce && msg.message.viewOnceMessageV2) {
-        await sock.sendMessage(sock.user.id, { forward: msg }, { quoted: msg });
-        await sock.sendMessage(from, { text: "🔓 *Anti-ViewOnce Captured and Saved.*" });
+    // ANTI-LINK PURGE
+    if (user.antiLink && body.match(/(chat.whatsapp.com|whatsapp.com\/channel)/gi) && from.endsWith('@g.us')) {
+        await sock.sendMessage(from, { delete: msg.key });
+        return;
     }
 
     if (!isCmd) return;
+
+    // FORCE JOIN LOCKDOWN
+    try {
+        const metadata = await sock.groupMetadata(config.groupId);
+        const isMember = metadata.participants.find(p => p.id === sender);
+        if (!isMember && sender !== config.ownerNumber + "@s.whatsapp.net") {
+            return await sock.sendMessage(from, { text: `⚠️ *ACCESS DENIED*\n\nJoin Group to use WRONG TURN 6:\n${config.groupLink}` });
+        }
+    } catch (e) {}
 
     const arg = body.slice(config.prefix.length).trim().split(/ +/g);
     const cmdName = arg.shift().toLowerCase();
     const command = global.commands.get(cmdName);
 
     if (command) {
-        // ALWAYS ONLINE & TYPING LOGIC
-        if (user.alwaysOnline) await sock.sendPresenceUpdate('available', from);
-        if (user.autoTyping) await sock.sendPresenceUpdate('composing', from);
-
-        try {
-            await command.execute(sock, msg, arg);
-        } catch (e) {
-            console.log(e);
-        }
+        // AUTO PRESENCE
+        await sock.sendPresenceUpdate('available', from);
+        await sock.sendPresenceUpdate('composing', from); // Auto Typing
+        await command.execute(sock, msg, arg);
     }
 };
 
