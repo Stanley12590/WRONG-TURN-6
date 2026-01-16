@@ -1,28 +1,25 @@
 {
   "name": "wrongturn6-bot",
   "version": "6.0.0",
-  "description": "Multi-Device WhatsApp Bot by STANYTZ",
+  "description": "WhatsApp Bot by STANYTZ",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.5.1",
+    "@whiskeysockets/baileys": "6.4.0",
     "express": "^4.18.2",
     "mongoose": "^8.0.3",
     "pino": "^8.15.1",
     "axios": "^1.6.2",
     "dotenv": "^16.3.1",
-    "cors": "^2.8.5",
-    "helmet": "^7.0.0",
-    "express-rate-limit": "^7.1.3",
-    "express-session": "^1.17.3",
-    "socket.io": "^4.7.2"
+    "cors": "^2.8.5"
   },
   "engines": {
     "node": "18.x"
   },
-  "keywords": ["whatsapp-bot", "baileys", "multi-device"],
+  "keywords": ["whatsapp-bot", "baileys"],
   "author": "STANYTZ"
 }
