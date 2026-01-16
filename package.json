@@ -1,17 +1,17 @@
 {
-  "name": "wrongturn6-live",
-  "version": "6.0.0",
+  "name": "wrong-turn-6",
+  "version": "8.8.8",
+  "description": "Universal Modular OS by STANYTZ",
   "main": "bot.js",
-  "scripts": {
-    "start": "node bot.js",
-    "test": "echo \"Bot is working!\" && exit 0"
-  },
+  "scripts": { "start": "node bot.js" },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.4.0",
+    "@whiskeysockets/baileys": "6.6.0",
+    "mongoose": "latest",
+    "pino": "8.14.0",
     "express": "^4.18.2",
-    "mongoose": "^8.0.3"
+    "axios": "latest",
+    "cors": "latest"
   },
-  "engines": {
-    "node": "18.x"
-  }
+  "author": "STANYTZ",
+  "license": "MIT"
 }
