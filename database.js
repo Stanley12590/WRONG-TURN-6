@@ -2,17 +2,19 @@ const mongoose = require('mongoose');
 
 const SessionSchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true },
-    creds: { type: Object } // Hapa ndipo login ya WhatsApp itakaa
+    creds: { type: Object }
 });
 
 const UserSchema = new mongoose.Schema({
     id: { type: String, unique: true },
+    name: String,
     antiDelete: { type: Boolean, default: true },
     antiViewOnce: { type: Boolean, default: true },
-    verified: { type: Boolean, default: false }
+    autoStatus: { type: Boolean, default: true },
+    antiLink: { type: Boolean, default: true }
 });
 
-const Session = mongoose.model('Session', SessionSchema);
-const User = mongoose.model('User', UserSchema);
+const Session = mongoose.model('WT6_Session', SessionSchema);
+const User = mongoose.model('WT6_User', UserSchema);
 
 module.exports = { Session, User };
