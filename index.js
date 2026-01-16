@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
@@ -22,16 +23,37 @@ const io = new Server(server, {
     }
 });
 
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again after 15 minutes'
+});
+
+// Apply rate limiting to API routes
+app.use('/api/', limiter);
+
 // Middleware
-app.use(helmet());
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "https://i.ibb.co"],
+            connectSrc: ["'self'"],
+        }
+    }
+}));
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
 // Global variables
-global.activeBots = new Map(); // Store active bot sessions
-global.commands = new Map(); // Store commands
+global.activeBots = new Map();
+global.commands = new Map();
 
 // Connect to Database
 connectDB();
@@ -44,24 +66,53 @@ const loadCommands = () => {
         console.log('📁 Creating commands directory...');
         fs.mkdirSync(commandsPath, { recursive: true });
         
-        // Create default command structure
-        const defaultCommands = {
-            'owner': ['menu.js', 'eval.js', 'broadcast.js'],
-            'public': ['help.js', 'ping.js', 'status.js']
-        };
+        // Create example commands
+        const exampleMenu = `
+module.exports = {
+    name: 'menu',
+    description: 'Show bot menu',
+    category: 'owner',
+    
+    async execute(sock, msg, args, sessionData) {
+        const from = msg.key.remoteJid;
+        await sock.sendMessage(from, {
+            text: \`*WRONG TURN 6 BOT*\\n\\n👑 Developer: STANYTZ\\n📱 User: \${sessionData?.phoneNumber || 'Unknown'}\\n⚡ Prefix: .\\n\\nType .help for all commands\`
+        });
+    }
+};
+        `;
         
-        for (const [folder, files] of Object.entries(defaultCommands)) {
-            const folderPath = path.join(commandsPath, folder);
-            fs.mkdirSync(folderPath, { recursive: true });
-            
-            files.forEach(file => {
-                const filePath = path.join(folderPath, file);
-                if (!fs.existsSync(filePath)) {
-                    fs.writeFileSync(filePath, `// ${file} command\n`, 'utf8');
-                }
-            });
-        }
-        console.log('✅ Created default command structure');
+        const examplePing = `
+module.exports = {
+    name: 'ping',
+    description: 'Check bot response time',
+    category: 'public',
+    
+    async execute(sock, msg) {
+        const start = Date.now();
+        await sock.sendPresenceUpdate('composing', msg.key.remoteJid);
+        
+        const end = Date.now();
+        const latency = end - start;
+        
+        await sock.sendMessage(msg.key.remoteJid, {
+            text: \`🏓 *PONG!*\\n\\n📶 Latency: *\${latency}ms*\\n🕐 Server Time: *\${new Date().toLocaleTimeString()}*\`
+        });
+    }
+};
+        `;
+        
+        // Create folders
+        fs.mkdirSync(path.join(commandsPath, 'owner'), { recursive: true });
+        fs.mkdirSync(path.join(commandsPath, 'public'), { recursive: true });
+        fs.mkdirSync(path.join(commandsPath, 'admin'), { recursive: true });
+        
+        // Write example commands
+        fs.writeFileSync(path.join(commandsPath, 'owner', 'menu.js'), exampleMenu, 'utf8');
+        fs.writeFileSync(path.join(commandsPath, 'public', 'ping.js'), examplePing, 'utf8');
+        fs.writeFileSync(path.join(commandsPath, 'public', 'help.js'), '// Help command', 'utf8');
+        
+        console.log('✅ Created example command structure');
     }
     
     // Load all commands
@@ -112,7 +163,7 @@ app.get('/api/status', (req, res) => {
 
 app.get('/api/sessions', async (req, res) => {
     try {
-        const sessions = await Session.find({ status: 'active' });
+        const sessions = await Session.find({ status: 'active' }).limit(50);
         res.json({
             count: sessions.length,
             sessions: sessions.map(s => ({
@@ -142,10 +193,11 @@ app.post('/api/pair', async (req, res) => {
             return res.status(400).json({ error: 'Invalid phone number' });
         }
         
-        // Check if session already exists
+        // Check existing active session
         const existingSession = await Session.findOne({ 
             phoneNumber: cleanNumber,
-            status: 'active'
+            status: 'active',
+            expiresAt: { $gt: new Date() }
         });
         
         if (existingSession) {
@@ -156,37 +208,63 @@ app.post('/api/pair', async (req, res) => {
             });
         }
         
-        // Create new session
+        // Check max sessions limit
+        const activeSessionsCount = await Session.countDocuments({ 
+            status: 'active',
+            expiresAt: { $gt: new Date() }
+        });
+        
+        if (activeSessionsCount >= config.maxSessions) {
+            return res.status(429).json({ 
+                error: 'Maximum session limit reached. Please try again later.' 
+            });
+        }
+        
+        // Generate session ID
         const sessionId = `wt6_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         
-        // Request pairing code
-        const pairingCode = await requestPairingCode(cleanNumber);
-        
-        if (!pairingCode) {
-            return res.status(500).json({ error: 'Failed to generate pairing code' });
-        }
+        // Generate random pairing code (6 digits)
+        const pairingCode = Math.floor(100000 + Math.random() * 900000).toString();
         
         // Save session to database
         const newSession = new Session({
             sessionId,
             userId: `${cleanNumber}@s.whatsapp.net`,
             phoneNumber: cleanNumber,
+            creds: {}, // Will be updated when connected
             status: 'pending',
             pairingCode,
             connectionInfo: {
-                device: 'Web Client',
-                platform: 'WhatsApp Web'
-            }
+                device: 'WhatsApp Web',
+                platform: 'Web'
+            },
+            expiresAt: new Date(Date.now() + config.sessionTimeout)
         });
         
         await newSession.save();
+        
+        // Create or update user
+        await User.findOneAndUpdate(
+            { userId: `${cleanNumber}@s.whatsapp.net` },
+            {
+                userId: `${cleanNumber}@s.whatsapp.net`,
+                phoneNumber: cleanNumber,
+                name: `User_${cleanNumber.slice(-4)}`,
+                'stats.lastActive': new Date()
+            },
+            { upsert: true, new: true }
+        );
         
         // Log the pairing request
         await Log.create({
             type: 'pairing',
             sessionId,
             userId: `${cleanNumber}@s.whatsapp.net`,
-            details: { phoneNumber: cleanNumber, status: 'pending' }
+            details: { 
+                phoneNumber: cleanNumber, 
+                status: 'pending',
+                pairingCode: pairingCode 
+            }
         });
         
         res.json({
@@ -199,7 +277,7 @@ app.post('/api/pair', async (req, res) => {
         
     } catch (error) {
         console.error('Pairing error:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
@@ -212,21 +290,50 @@ app.get('/api/check-pairing/:sessionId', async (req, res) => {
             return res.status(404).json({ error: 'Session not found' });
         }
         
-        if (session.status === 'active') {
-            // Start bot for this session
-            await startBotForSession(session);
+        // Check if session expired
+        if (session.expiresAt < new Date()) {
+            session.status = 'expired';
+            await session.save();
+            
+            // Remove from active bots if exists
+            if (global.activeBots.has(sessionId)) {
+                const bot = global.activeBots.get(sessionId);
+                if (bot.socket) {
+                    await bot.socket.logout();
+                    await bot.socket.end();
+                }
+                global.activeBots.delete(sessionId);
+            }
             
             return res.json({
-                status: 'connected',
-                message: 'Bot is now connected!',
-                sessionId: session.sessionId
+                status: 'expired',
+                message: 'Session has expired. Please generate a new code.'
             });
+        }
+        
+        // If session is marked as active, start bot
+        if (session.status === 'active' && !global.activeBots.has(sessionId)) {
+            try {
+                await startBotForSession(session);
+            } catch (error) {
+                console.error('Error starting bot:', error);
+            }
+        }
+        
+        // Check if bot is actually connected
+        const isConnected = global.activeBots.has(sessionId);
+        
+        if (isConnected) {
+            // Update last seen
+            session.connectionInfo.lastSeen = new Date();
+            await session.save();
         }
         
         res.json({
             status: session.status,
+            connected: isConnected,
             pairingCode: session.pairingCode,
-            message: 'Waiting for pairing...'
+            message: session.status === 'active' ? 'Bot is connected!' : 'Waiting for pairing...'
         });
         
     } catch (error) {
@@ -246,9 +353,13 @@ app.post('/api/disconnect/:sessionId', async (req, res) => {
         // Disconnect bot if active
         if (global.activeBots.has(sessionId)) {
             const bot = global.activeBots.get(sessionId);
-            if (bot.socket) {
-                await bot.socket.logout();
-                await bot.socket.end();
+            try {
+                if (bot.socket) {
+                    await bot.socket.logout();
+                    await bot.socket.end();
+                }
+            } catch (error) {
+                console.error('Error during disconnect:', error);
             }
             global.activeBots.delete(sessionId);
         }
@@ -287,17 +398,9 @@ io.on('connection', (socket) => {
         if (session) {
             socket.emit('session-update', {
                 status: session.status,
-                pairingCode: session.pairingCode
+                pairingCode: session.pairingCode,
+                connected: global.activeBots.has(sessionId)
             });
-        }
-    });
-    
-    socket.on('request-pairing', async (phoneNumber) => {
-        try {
-            const pairingCode = await requestPairingCode(phoneNumber);
-            socket.emit('pairing-code', { phoneNumber, pairingCode });
-        } catch (error) {
-            socket.emit('pairing-error', { error: error.message });
         }
     });
     
@@ -321,14 +424,14 @@ async function initializeActiveSessions() {
         const activeSessions = await Session.find({ 
             status: 'active',
             expiresAt: { $gt: new Date() }
-        });
+        }).limit(config.maxSessions);
         
         console.log(`🔄 Initializing ${activeSessions.length} active sessions...`);
         
         for (const session of activeSessions) {
             try {
                 await startBotForSession(session);
-                console.log(`✅ Started bot for session: ${session.sessionId}`);
+                console.log(`✅ Started bot for: ${session.phoneNumber}`);
             } catch (error) {
                 console.error(`❌ Failed to start session ${session.sessionId}:`, error.message);
                 session.status = 'inactive';
@@ -339,23 +442,6 @@ async function initializeActiveSessions() {
         console.log('✅ All active sessions initialized');
     } catch (error) {
         console.error('❌ Error initializing sessions:', error);
-    }
-}
-
-// Pairing code generator
-async function requestPairingCode(phoneNumber) {
-    try {
-        // This function needs to be implemented with Baileys
-        // For now, we'll generate a random 6-digit code
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        
-        // In reality, you would use:
-        // const code = await sock.requestPairingCode(phoneNumber);
-        
-        return code;
-    } catch (error) {
-        console.error('Error generating pairing code:', error);
-        return null;
     }
 }
 
@@ -376,7 +462,8 @@ async function startBotForSession(session) {
             // Emit WebSocket event
             io.to(session.sessionId).emit('session-update', {
                 status: 'connected',
-                message: 'Bot is now active!'
+                message: 'Bot is now active!',
+                connected: true
             });
             
             // Log connection
@@ -400,7 +487,7 @@ async function startBotForSession(session) {
 loadCommands();
 
 // Start server
-const PORT = config.port || 3000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🚀 ${config.botName} Server running on port ${PORT}`);
     console.log(`👑 Developer: ${config.developer}`);
@@ -426,9 +513,8 @@ process.on('SIGTERM', async () => {
         }
     }
     
-    // Close database connection
-    await mongoose.connection.close();
-    console.log('✅ Database connection closed');
-    
     process.exit(0);
 });
+
+// Export for testing
+module.exports = { app, server };
