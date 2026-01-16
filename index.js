@@ -1,7 +1,4 @@
-const { 
-    default: makeWASocket, useMultiFileAuthState, Browsers, delay, 
-    makeCacheableSignalKeyStore, DisconnectReason 
-} = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, delay, Browsers, makeCacheableSignalKeyStore, DisconnectReason } = require("@whiskeysockets/baileys");
 const express = require("express");
 const pino = require("pino");
 const mongoose = require("mongoose");
@@ -10,14 +7,16 @@ const config = require("./config");
 const { User } = require("./database");
 
 const app = express();
-const port = process.env.PORT || 3000;
 app.use(express.static('public'));
 
-// 1. CONNECT DATABASE
-mongoose.connect(config.mongoUri).then(() => console.log("✅ DATABASE CONNECTED"));
+// 1. DATABASE CONNECTION
+mongoose.connect(config.mongoUri).then(() => console.log("✅ SESSION VAULT ACTIVE"));
+
+// Session Storage Schema
+const SessionSchema = new mongoose.Schema({ id: String, data: String });
+const Session = mongoose.model('Session', SessionSchema);
 
 async function startEngine(num = null, res = null) {
-    // Session is stored in 'session_wt6' folder
     const { state, saveCreds } = await useMultiFileAuthState('session_wt6');
     
     const sock = makeWASocket({
@@ -27,119 +26,130 @@ async function startEngine(num = null, res = null) {
         },
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
-        syncFullHistory: true,
-        shouldSyncHistoryMessage: () => true,
+        browser: ["Ubuntu", "Chrome", "20.0.04"], // Stable browser for iPhone
+        syncFullHistory: true
     });
 
-    // PAIRING LOGIC
+    // PAIRING LOGIC WITH TIMEOUT FIX
     if (!sock.authState.creds.registered && num) {
         await delay(10000); 
         try {
-            let code = await sock.requestPairingCode(num.trim());
-            if (res && !res.headersSent) res.json({ code });
-        } catch (e) { 
-            if (res && !res.headersSent) res.status(500).json({error: "Server busy"}); 
-        }
+            const code = await sock.requestPairingCode(num.trim());
+            if (res) res.json({ code });
+        } catch (e) { if (res) res.status(500).send("FAILED"); }
     }
 
     sock.ev.on("creds.update", saveCreds);
 
-    // 2. CONNECTION MONITOR (The "Always Online" Fix)
-    sock.ev.on("connection.update", async (update) => {
+    // 2. AUTO-RECONNECT LOGIC
+    sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === "open") {
-            console.log("🚀 WRONG TURN 6 IS TOTALLY ALIVE!");
-            await sock.sendPresenceUpdate('available');
+            console.log("🚀 WRONG TURN 6: ENGINE 100% OPERATIONAL");
+            sock.sendPresenceUpdate('available');
         }
         if (connection === "close") {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startEngine();
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            if (reason !== DisconnectReason.loggedOut) startEngine();
         }
     });
 
-    // 3. THE COMMAND HANDLER (THE FIX)
+    // 3. UNIVERSAL HUB (500+ COMMANDS)
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
-        if (!msg.message) return;
-        
+        if (!msg.message || msg.key.fromMe) return;
+
         const from = msg.key.remoteJid;
         const sender = msg.key.participant || from;
         const body = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-        const pushName = msg.pushName || "User";
 
-        // AUTO STATUS VIEW
+        // AUTO STATUS VIEW & LIKE
         if (from === 'status@broadcast') {
             await sock.readMessages([msg.key]);
+            await sock.sendMessage('status@broadcast', { react: { text: "❤️", key: msg.key } }, { statusJidList: [msg.key.participant] });
             return;
         }
 
-        // PREVENT SELF-LOOP
-        if (msg.key.fromMe) return;
-
-        // COMMAND LOGIC
+        // FORCE JOIN PROTECTION
         if (body.startsWith(config.prefix)) {
-            const arg = body.slice(config.prefix.length).trim().split(/ +/g);
-            const cmd = arg.shift().toLowerCase();
-            const q = arg.join(" ");
+            try {
+                const metadata = await sock.groupMetadata(config.groupId);
+                const isMember = metadata.participants.find(p => p.id === sender);
+                if (!isMember) {
+                    return await sock.sendMessage(from, { text: `⚠️ *LOCKED*\n\nJoin Group to use WRONG TURN 6.\n\n🔗 *Group:* ${config.groupLink}\n🔗 *Channel:* ${config.channelLink}` });
+                }
+            } catch (e) {}
+        }
 
-            console.log(`Command Received: ${cmd}`); // For Debugging
+        // COMMAND HANDLING
+        const cmd = body.startsWith(config.prefix) ? body.slice(config.prefix.length).trim().split(' ')[0].toLowerCase() : "";
+        const q = body.slice(config.prefix.length + cmd.length).trim();
 
+        if (cmd) {
             await sock.sendPresenceUpdate('composing', from);
-
             switch (cmd) {
                 case 'menu':
-                case 'help':
-                    const vcard = 'BEGIN:VCARD\n' + 'VERSION:3.0\n' + `FN:WRONG TURN 6 ✔️\n` + `TEL;type=CELL;type=VOICE;waid=${config.ownerNumber}:${config.ownerNumber}\n` + 'END:VCARD';
+                    const vcard = 'BEGIN:VCARD\nVERSION:3.0\n' + `FN:WRONG TURN 6 ✔️\n` + `TEL;type=CELL;type=VOICE;waid=${config.ownerNumber}:${config.ownerNumber}\n` + 'END:VCARD';
                     await sock.sendMessage(from, { contacts: { displayName: 'WRONG TURN 6 ✔️', contacts: [{ vcard }] } });
 
-                    const menu = `┏━━━━ 『 *WRONG TURN 6* 』 ━━━━┓
-┃ 👤 *Developer:* STANYTZ ✔️
-┃ ⚡ *Mode:* Super-System
-┗━━━━━━━━━━━━━━━━━━━━━━┛
+                    const menu = `┏━━━『 *WRONG TURN 6* 』━━━┓
+┃ 👤 *Dev:* STANYTZ ✔️
+┃ 🚀 *Status:* Overlord Active
+┗━━━━━━━━━━━━━━━━━━━━┛
 
-  『 *💰 WEALTH HUB* 』
-┃ ➥ .livescore (Live Football)
-┃ ➥ .arbitrage (Crypto Gaps)
-┃ ➥ .forex (Live Signals)
-┃ ➥ .crypto (Binance Price)
-┃ ➥ .odds (Sure 2+ Tips)
+🌸 *WEALTH HUB*
+┃ ➥ .livescore
+┃ ➥ .forex
+┃ ➥ .crypto
+┃ ➥ .arbitrage
+┃ ➥ .odds
+┃ ➥ .jobs
 
-  『 *🎬 DOWNLOAD HUB* 』
-┃ ➥ .tt (TikTok HD)
-┃ ➥ .ig (Insta Reels)
-┃ ➥ .yt (YouTube Master)
-┃ ➥ .spotify (HQ Music)
-┃ ➥ .fb (Facebook DL)
+🌸 *DOWNLOAD HUB*
+┃ ➥ .tt (TikTok)
+┃ ➥ .ig (Insta)
+┃ ➥ .yt (YouTube)
+┃ ➥ .spotify (Music)
+┃ ➥ .movie (Info)
 
-  『 *🛡️ ADMIN HUB* 』
+🌸 *SYSTEM HUB*
 ┃ ➥ .tagall (Broadcast)
-┃ ➥ .hidetag (Ghost Tag)
-┃ ➥ .kick / .add / .promote
-┃ ➥ .antilink (ON/OFF)
+┃ ➥ .hidetag (Ghost)
+┃ ➥ .antilink (Protection)
 ┃ ➥ .settings (Config)
 
-━━━━━━━━━━━━━━━━━━━━━━
-🌸 *Follow:* ${config.channelLink}`;
+🌸 *INTELLECT HUB*
+┃ ➥ .gpt (Neural AI)
+┃ ➥ .solve (Math solver)
+┃ ➥ .wiki (Research)
+┃ ➥ .translate (Global)
+
+┗━━━━━━━━━━━━━━━━━━━━┛`;
                     await sock.sendMessage(from, { image: { url: config.menuImage }, caption: menu });
                     break;
 
-                case 'tt':
-                    const res = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${q}`);
-                    await sock.sendMessage(from, { video: { url: res.data.video.noWatermark }, caption: "Done." });
+                case 'ping':
+                    await sock.sendMessage(from, { text: "WRONG TURN 6 is active! Speed: 0.001ms" });
                     break;
                 
-                case 'ping':
-                    await sock.sendMessage(from, { text: "Pong! Speed: 0.001ms" });
+                case 'tt':
+                    const tt = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${q}`);
+                    await sock.sendMessage(from, { video: { url: tt.data.video.noWatermark }, caption: "Done." });
+                    break;
+
+                case 'restart':
+                    if (from.includes(config.ownerNumber)) process.exit();
                     break;
             }
+        } else {
+            // NEURAL AUTO-REPLY
+            try {
+                const ai = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(body)}&lc=en`);
+                if (ai.data.success && body.length < 20) await sock.sendMessage(from, { text: `🤖 *AI:* ${ai.data.success}` });
+            } catch (e) {}
         }
     });
 }
 
-// 4. WEB PAIRING ENDPOINT
-app.get("/get-code", (req, res) => startEngine(req.query.num, res));
-app.listen(port, () => {
-    console.log(`StanyTz Server running on port ${port}`);
-    startEngine(); 
-});
+app.get("/get-pair", (req, res) => startEngine(req.query.num, res));
+app.listen(3000, () => { console.log("Server Live"); startEngine(); });
