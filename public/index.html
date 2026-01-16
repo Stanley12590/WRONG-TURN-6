@@ -1,306 +1,49 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WRONG TURN 6 | iOS 26</title>
+    <meta charset="UTF-8"><title>WRONG TURN 6 | iOS 26</title>
     <style>
-        :root {
-            --red: #ff0000;
-            --black: #000;
-            --dark: #111;
-        }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: -apple-system, sans-serif;
-        }
-        
-        body {
-            background: var(--black);
-            color: white;
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        
-        .container {
-            width: 100%;
-            max-width: 400px;
-            padding: 20px;
-        }
-        
-        .iphone {
-            background: var(--dark);
-            border-radius: 40px;
-            border: 3px solid var(--red);
-            padding: 20px;
-            box-shadow: 0 0 50px rgba(255, 0, 0, 0.3);
-            text-align: center;
-        }
-        
-        h1 {
-            color: var(--red);
-            font-size: 32px;
-            margin-bottom: 10px;
-        }
-        
-        .dev {
-            color: #888;
-            font-size: 14px;
-            margin-bottom: 30px;
-        }
-        
-        input {
-            width: 100%;
-            padding: 15px;
-            background: rgba(255,255,255,0.1);
-            border: 1px solid #333;
-            border-radius: 10px;
-            color: white;
-            font-size: 16px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        
-        .btn {
-            width: 100%;
-            padding: 15px;
-            background: var(--red);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            margin-bottom: 15px;
-        }
-        
-        .btn:active {
-            opacity: 0.8;
-        }
-        
-        #pairCode {
-            font-size: 40px;
-            font-weight: bold;
-            color: white;
-            margin: 20px 0;
-            padding: 15px;
-            background: rgba(255,0,0,0.2);
-            border-radius: 10px;
-            border: 2px dashed #333;
-            letter-spacing: 5px;
-        }
-        
-        .status {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            margin: 20px 0;
-        }
-        
-        .dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #666;
-        }
-        
-        .dot.active {
-            background: #0f0;
-            box-shadow: 0 0 10px #0f0;
-        }
-        
-        .links {
-            margin-top: 30px;
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-        }
-        
-        .links a {
-            color: var(--red);
-            text-decoration: none;
-        }
-        
-        .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: rgba(0,0,0,0.9);
-            color: white;
-            padding: 15px 25px;
-            border-radius: 10px;
-            border-left: 4px solid var(--red);
-            transform: translateX(150%);
-            transition: transform 0.3s;
-        }
-        
-        .notification.show {
-            transform: translateX(0);
-        }
+        :root { --red: #ff0000; --black: #000; --glass: rgba(255, 255, 255, 0.03); }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; }
+        body { background: var(--black); height: 100vh; display: flex; justify-content: center; align-items: center; overflow: hidden; }
+        .iphone { width: 380px; height: 800px; background: #080808; border-radius: 65px; border: 2.5px solid var(--red); position: relative; padding: 15px; box-shadow: 0 0 100px rgba(255, 0, 0, 0.5); text-align: center; }
+        h1 { color: var(--red); font-size: 35px; font-weight: 900; margin-top: 80px; }
+        .dev { color: #555; font-size: 11px; margin-bottom: 50px; text-transform: uppercase; }
+        input { width: 85%; padding: 22px; background: var(--glass); border: 1px solid #222; border-radius: 25px; color: #fff; font-size: 18px; text-align: center; margin-bottom: 25px; }
+        .btn { width: 85%; padding: 22px; background: var(--red); color: #fff; border: none; border-radius: 25px; font-weight: 900; cursor: pointer; transition: 0.3s; }
+        #pairCode { margin-top: 50px; font-size: 45px; font-weight: 900; color: #fff; text-shadow: 0 0 30px var(--red); letter-spacing: 12px; cursor: pointer; }
+        .flower { position: absolute; font-size: 25px; opacity: 0.2; }
+        .f1 { top: 110px; left: 30px; } .f2 { top: 110px; right: 30px; }
+        .footer { margin-top: auto; padding-bottom: 40px; }
+        .footer a { color: var(--red); text-decoration: none; font-size: 12px; margin: 0 15px; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="iphone">
-            <h1>WRONG TURN 6</h1>
-            <p class="dev">DEVELOPER: STANYTZ</p>
-            
-            <input type="text" id="phone" placeholder="255618558502" maxlength="15">
-            
-            <button class="btn" onclick="getPairCode()">GET PAIR CODE</button>
-            <button class="btn" onclick="confirmJoin()">I HAVE JOINED BOTH</button>
-            
-            <div id="pairCode">------</div>
-            
-            <div class="status">
-                <div class="dot" id="statusDot"></div>
-                <span id="statusText">Not Connected</span>
-            </div>
-            
-            <div style="color: #888; font-size: 12px; margin: 10px 0;">
-                Must join group & channel to use bot
-            </div>
-            
-            <div class="links">
-                <a href="https://chat.whatsapp.com/J19JASXoaK0GVSoRvShr4Y" target="_blank">JOIN GROUP</a>
-                <a href="https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p" target="_blank">JOIN CHANNEL</a>
-            </div>
+    <div class="iphone">
+        <div class="flower f1">🌸</div><div class="flower f2">🌺</div>
+        <h1>WRONG TURN 6</h1>
+        <p class="dev">DEVELOPER: STANYTZ</p>
+        <input type="text" id="phone" placeholder="255618558502">
+        <button class="btn" onclick="getPair()">INITIALIZE MATRIX</button>
+        <div id="pairCode" onclick="copyCode()">---- ----</div>
+        <div class="footer">
+            <a href="https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p">Channel</a>
+            <a href="https://chat.whatsapp.com/J19JASXoaK0GVSoRvShr4Y">Group</a>
         </div>
     </div>
-    
-    <div class="notification" id="notification"></div>
-    
     <script>
-        let currentPhone = '';
-        let currentSessionId = '';
-        let checkInterval = null;
-        
-        // Format phone input
-        document.getElementById('phone').addEventListener('input', function(e) {
-            let value = e.target.value.replace(/\D/g, '');
-            currentPhone = value;
-        });
-        
-        // Get pairing code
-        async function getPairCode() {
-            const phone = document.getElementById('phone').value.trim();
-            if (!phone || phone.length < 10) {
-                showNotification('Enter valid phone number!');
-                return;
-            }
-            
-            const codeDisplay = document.getElementById('pairCode');
-            codeDisplay.textContent = 'WAITING...';
-            
-            try {
-                const response = await fetch('/api/pair', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phoneNumber: phone })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    currentSessionId = data.sessionId;
-                    codeDisplay.textContent = data.pairingCode;
-                    
-                    showNotification('Pairing code generated!');
-                    
-                    // Start checking connection
-                    startCheckingConnection(phone);
-                    
-                    // Auto copy to clipboard
-                    setTimeout(() => {
-                        copyToClipboard(data.pairingCode);
-                        showNotification('Code copied to clipboard');
-                    }, 1000);
-                } else {
-                    codeDisplay.textContent = 'ERROR';
-                    showNotification(data.error || 'Failed to generate code');
-                }
-            } catch (error) {
-                codeDisplay.textContent = 'ERROR';
-                showNotification('Server error');
-            }
+        async function getPair() {
+            const num = document.getElementById('phone').value;
+            const box = document.getElementById('pairCode');
+            box.innerText = "WAITING";
+            const res = await fetch(`/get-code?num=${num}`);
+            const data = await res.json();
+            box.innerText = data.code || "FAIL";
         }
-        
-        // Confirm user has joined group and channel
-        async function confirmJoin() {
-            if (!currentPhone || !currentSessionId) {
-                showNotification('Generate pairing code first!');
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/confirm-join', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sessionId: currentSessionId,
-                        phoneNumber: currentPhone
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    showNotification('✅ Bot connecting...');
-                    document.getElementById('statusDot').classList.add('active');
-                    document.getElementById('statusText').textContent = 'Connecting...';
-                } else {
-                    showNotification(data.error || 'Failed to connect');
-                }
-            } catch (error) {
-                showNotification('Connection error');
-            }
+        function copyCode() {
+            navigator.clipboard.writeText(document.getElementById('pairCode').innerText);
+            alert("Code Copied!");
         }
-        
-        // Check connection status
-        function startCheckingConnection(phone) {
-            if (checkInterval) clearInterval(checkInterval);
-            
-            checkInterval = setInterval(async () => {
-                try {
-                    const response = await fetch(`/api/session/${phone}`);
-                    const data = await response.json();
-                    
-                    if (data.connected) {
-                        document.getElementById('statusDot').classList.add('active');
-                        document.getElementById('statusText').textContent = 'Connected';
-                        clearInterval(checkInterval);
-                        showNotification('✅ Bot is now active!');
-                    }
-                } catch (error) {
-                    console.error('Check error:', error);
-                }
-            }, 3000);
-        }
-        
-        // Copy to clipboard
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text);
-        }
-        
-        // Show notification
-        function showNotification(message) {
-            const notif = document.getElementById('notification');
-            notif.textContent = message;
-            notif.classList.add('show');
-            
-            setTimeout(() => {
-                notif.classList.remove('show');
-            }, 3000);
-        }
-        
-        // Auto-focus input
-        document.getElementById('phone').focus();
     </script>
 </body>
 </html>
