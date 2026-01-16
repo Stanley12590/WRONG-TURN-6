@@ -1,50 +1,20 @@
 const mongoose = require('mongoose');
 
-// Session Schema
 const SessionSchema = new mongoose.Schema({
-    sessionId: { type: String, required: true, unique: true },
-    phoneNumber: { type: String, required: true },
-    creds: { type: Object },
-    status: { type: String, default: 'pending' },
-    pairingCode: String,
-    joinedGroup: { type: Boolean, default: false },
-    joinedChannel: { type: Boolean, default: false },
-    connectedAt: Date,
-    lastSeen: Date
+    id: { type: String, required: true, unique: true },
+    creds: { type: Object }
 });
 
-// User Schema
 const UserSchema = new mongoose.Schema({
-    userId: { type: String, required: true, unique: true },
-    phoneNumber: { type: String, required: true },
+    id: { type: String, unique: true },
     name: String,
-    joinedGroup: { type: Boolean, default: false },
-    joinedChannel: { type: Boolean, default: false },
-    warnings: { type: Number, default: 0 },
-    banned: { type: Boolean, default: false },
-    lastActive: Date,
-    createdAt: { type: Date, default: Date.now }
+    antiDelete: { type: Boolean, default: true },
+    antiLink: { type: Boolean, default: true },
+    autoStatus: { type: Boolean, default: true },
+    verified: { type: Boolean, default: true }
 });
 
-const Session = mongoose.model('Session', SessionSchema);
-const User = mongoose.model('User', UserSchema);
+const Session = mongoose.model('WT6_Session', SessionSchema);
+const User = mongoose.model('WT6_User', UserSchema);
 
-// Connect to MongoDB
-const connectDB = async () => {
-    try {
-        const mongoURI = process.env.MONGO_URI || "mongodb+srv://stanytz076:stanytz076@cluster0.ennpt6t.mongodb.net/WrongTurn6?retryWrites=true&w=majority";
-        
-        await mongoose.connect(mongoURI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true
-        });
-        
-        console.log('✅ MongoDB Connected Successfully');
-        return true;
-    } catch (error) {
-        console.error('❌ MongoDB Connection Error:', error.message);
-        return false;
-    }
-};
-
-module.exports = { Session, User, connectDB };
+module.exports = { Session, User };
