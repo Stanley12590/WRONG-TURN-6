@@ -9,9 +9,9 @@ const { commandHandler } = require("./handler");
 const app = express();
 app.use(express.static('public'));
 
-mongoose.connect(config.mongoUri).then(() => console.log("✅ DATABASE CONNECTED"));
+mongoose.connect(config.mongoUri).then(() => console.log("✅ MATRIX DB CONNECTED"));
 
-// Global Map for Commands
+// Global Loader
 global.commands = new Map();
 const loadCmds = () => {
     const folders = fs.readdirSync('./commands');
@@ -24,11 +24,9 @@ const loadCmds = () => {
     }
 };
 
-let sock;
-
 async function startEngine(num = null, res = null) {
     const { state, saveCreds } = await useMultiFileAuthState('session_wt6');
-    sock = makeWASocket({
+    const sock = makeWASocket({
         auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) },
         logger: pino({ level: "silent" }),
         browser: ["Ubuntu", "Chrome", "20.0.04"],
@@ -36,30 +34,26 @@ async function startEngine(num = null, res = null) {
     });
 
     if (!sock.authState.creds.registered && num) {
-        await delay(15000); 
+        await delay(12000); 
         try {
             const code = await sock.requestPairingCode(num.trim());
             if (res) res.json({ code });
-        } catch (e) { if (res) res.status(500).send("Matrix Error"); }
+        } catch (e) { if (res) res.status(500).send("FAILED"); }
     }
 
     sock.ev.on("creds.update", saveCreds);
 
-    // 1. CONNECTION & WELCOME MESSAGE
-    sock.ev.on("connection.update", async (u) => {
-        const { connection, lastDisconnect } = u;
+    // WELCOME LOGIC AFTER SUCCESSFUL LINK
+    sock.ev.on("connection.update", async (update) => {
+        const { connection } = update;
         if (connection === "open") {
-            console.log("🚀 WRONG TURN 6 IS LIVE");
-            sock.sendPresenceUpdate('available');
+            console.log("🚀 WRONG TURN 6: CONNECTED AND DANGEROUS!");
+            sock.sendPresenceUpdate('available'); // Always Online
 
-            // Send Professional Welcome & Manual to User
-            const welcome = `🚀 *WRONG TURN 6 CONNECTED* 🚀\n\nWelcome to your Universal OS.\n\n*Developer:* STANYTZ ✔️\n*Status:* Always Online\n\n*QUICK START:*\n1. Type *.menu* to see all 500+ Hubs.\n2. Settings are AUTO-SET to Maximum Protection.\n3. Join our Channel for updates.\n\n_System fully functional._`;
-            await sock.sendMessage(sock.user.id, { text: welcome });
+            const welcomeMsg = `🚀 *WRONG TURN 6 CONNECTED SUCCESSFULLY!* 🚀\n\nDeveloper: *STANYTZ* ✔️\nStatus: *Always Online* ✅\n\n*USER MANUAL:*\n1. Use *.menu* to see all 500+ Hubs.\n2. Settings (Anti-Link, Anti-Delete) are AUTO-ENABLED.\n3. Type *.settings* to customize.\n\n_System fully operational._`;
+            await sock.sendMessage(sock.user.id, { text: welcomeMsg });
         }
-        if (connection === "close") {
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            if (reason !== DisconnectReason.loggedOut) startEngine();
-        }
+        if (connection === "close") startEngine();
     });
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
