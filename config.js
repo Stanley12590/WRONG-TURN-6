@@ -1,11 +1,33 @@
+require('dotenv').config();
+
 module.exports = {
-    botName: "WRONG TURN 6",
-    ownerName: "STANYTZ",
-    ownerNumber: "255618558502", 
-    prefix: ".",
-    mongoUri: "mongodb+srv://stanytz076:stanytz076@cluster0.ennpt6t.mongodb.net/WrongTurn6?retryWrites=true&w=majority",
-    channelLink: "https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p",
-    groupLink: "https://chat.whatsapp.com/J19JASXoaK0GVSoRvShr4Y",
-    groupId: "J19JASXoaK0GVSoRvShr4Y@g.us", // Use .jid command later to get the exact ID
-    menuImage: "https://files.catbox.moe/kmmb87.jpeg"
+    // Bot Identity
+    botName: process.env.BOT_NAME || "WRONG TURN 6",
+    developer: process.env.DEVELOPER || "STANYTZ",
+    prefix: process.env.PREFIX || ".",
+    ownerNumber: process.env.OWNER_NUMBER || "255618558502",
+    
+    // Database
+    mongoUri: process.env.MONGO_URI,
+    
+    // Social Links
+    channelLink: process.env.CHANNEL_LINK,
+    groupLink: process.env.GROUP_LINK,
+    groupId: process.env.GROUP_ID,
+    menuImage: process.env.MENU_IMAGE,
+    
+    // Web App
+    appUrl: process.env.APP_URL || "http://localhost:3000",
+    
+    // Security
+    sessionSecret: process.env.SESSION_SECRET,
+    apiKey: process.env.API_KEY,
+    
+    // Bot Settings
+    maxSessions: 350, // Maximum user sessions allowed
+    sessionTimeout: 24 * 60 * 60 * 1000, // 24 hours
+    rateLimit: {
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 350 // limit each IP to 100 requests per windowMs
+    }
 };
