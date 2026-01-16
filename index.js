@@ -1,6 +1,5 @@
-require('dotenv').config();
+require('env').config();
 const express = require('express');
-const mongoose = require('mongoose');
 const config = require('./config');
 const { Session, User, connectDB } = require('./database');
 const { createBotSession, botSessions } = require('./bot-manager');
@@ -9,9 +8,6 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
-
-// Global variables
-global.bots = new Map();
 
 // Routes
 app.get('/', (req, res) => {
