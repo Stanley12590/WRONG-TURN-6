@@ -13,164 +13,133 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.static('public'));
 
-mongoose.connect(config.mongoUri).then(() => console.log("✅ MONGO MATRIX ACTIVE"));
-
-const msgCache = {}; // Memory for Anti-Delete
+// 1. CONNECT DATABASE
+mongoose.connect(config.mongoUri).then(() => console.log("✅ DATABASE CONNECTED"));
 
 async function startEngine(num = null, res = null) {
+    // Session is stored in 'session_wt6' folder
     const { state, saveCreds } = await useMultiFileAuthState('session_wt6');
+    
     const sock = makeWASocket({
-        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) },
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+        },
+        printQRInTerminal: false,
         logger: pino({ level: "silent" }),
         browser: ["Ubuntu", "Chrome", "20.0.04"],
-        printQRInTerminal: false,
-        syncFullHistory: true
+        syncFullHistory: true,
+        shouldSyncHistoryMessage: () => true,
     });
 
-    // FIX PRECONDITION ERROR: Long delay and check
+    // PAIRING LOGIC
     if (!sock.authState.creds.registered && num) {
-        await delay(15000); 
+        await delay(10000); 
         try {
             let code = await sock.requestPairingCode(num.trim());
             if (res && !res.headersSent) res.json({ code });
-        } catch (e) { if (res) res.status(500).json({ error: "Try Again In 1 Min" }); }
+        } catch (e) { 
+            if (res && !res.headersSent) res.status(500).json({error: "Server busy"}); 
+        }
     }
 
     sock.ev.on("creds.update", saveCreds);
 
-    // AUTO STATUS VIEW & LIKE
+    // 2. CONNECTION MONITOR (The "Always Online" Fix)
+    sock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === "open") {
+            console.log("🚀 WRONG TURN 6 IS TOTALLY ALIVE!");
+            await sock.sendPresenceUpdate('available');
+        }
+        if (connection === "close") {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) startEngine();
+        }
+    });
+
+    // 3. THE COMMAND HANDLER (THE FIX)
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
-        if (msg.key.remoteJid === 'status@broadcast') {
-            await sock.readMessages([msg.key]); // View
-            await sock.sendMessage('status@broadcast', { react: { text: "❤️", key: msg.key } }, { statusJidList: [msg.key.participant] }); // Like
-            return;
-        }
-
-        if (!msg.message || msg.key.fromMe) return;
+        if (!msg.message) return;
+        
         const from = msg.key.remoteJid;
         const sender = msg.key.participant || from;
         const body = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+        const pushName = msg.pushName || "User";
 
-        msgCache[msg.key.id] = msg; // Store for Anti-Delete
+        // AUTO STATUS VIEW
+        if (from === 'status@broadcast') {
+            await sock.readMessages([msg.key]);
+            return;
+        }
 
-        // 1. REGISTER USER & LOAD SETTINGS
-        let user = await User.findOne({ id: sender });
-        if (!user) user = await User.create({ id: sender, name: msg.pushName });
+        // PREVENT SELF-LOOP
+        if (msg.key.fromMe) return;
 
-        // 2. FORCE JOIN CHECK
+        // COMMAND LOGIC
         if (body.startsWith(config.prefix)) {
-            try {
-                const groupMetadata = await sock.groupMetadata(config.groupId);
-                const isMember = groupMetadata.participants.find(p => p.id === sender);
-                if (!isMember && sender !== config.ownerNumber + "@s.whatsapp.net") {
-                    return await sock.sendMessage(from, { text: `⚠️ *ACCESS DENIED*\n\nJoin our Group & Channel to unlock *WRONG TURN 6*.\n\n🔗 *Group:* ${config.groupLink}\n🔗 *Channel:* ${config.channelLink}` });
-                }
-            } catch (e) {}
-        }
+            const arg = body.slice(config.prefix.length).trim().split(/ +/g);
+            const cmd = arg.shift().toLowerCase();
+            const q = arg.join(" ");
 
-        // 3. ANTI-LINK (PURGE)
-        if (user.antiLink && body.match(/(chat.whatsapp.com|whatsapp.com\/channel)/gi) && from.endsWith('@g.us')) {
-            await sock.sendMessage(from, { delete: msg.key });
-            return await sock.sendMessage(from, { text: "🚫 *Links are blocked here!*" });
-        }
+            console.log(`Command Received: ${cmd}`); // For Debugging
 
-        // 4. VIEW-ONCE BYPASS
-        if (user.viewOnceBypass && msg.message.viewOnceMessageV2) {
-            await sock.sendMessage(sock.user.id, { forward: msg });
-            await sock.sendMessage(from, { text: "🔓 *Anti-ViewOnce:* Captured to private vault." });
-        }
-
-        const cmd = body.startsWith(config.prefix) ? body.slice(config.prefix.length).trim().split(' ')[0].toLowerCase() : "";
-        const q = body.slice(config.prefix.length + cmd.length).trim();
-
-        if (cmd) {
             await sock.sendPresenceUpdate('composing', from);
-            
+
             switch (cmd) {
                 case 'menu':
-                    // Verified Blue Tick Identity
-                    const vcard = 'BEGIN:VCARD\n' + 'VERSION:3.0\n' + `FN:${config.botName} ✔️\n` + `ORG:DEVELOPER STANYTZ;\n` + `TEL;type=CELL;type=VOICE;waid=${config.ownerNumber}:${config.ownerNumber}\n` + 'END:VCARD';
-                    await sock.sendMessage(from, { contacts: { displayName: `${config.botName} ✔️`, contacts: [{ vcard }] } });
+                case 'help':
+                    const vcard = 'BEGIN:VCARD\n' + 'VERSION:3.0\n' + `FN:WRONG TURN 6 ✔️\n` + `TEL;type=CELL;type=VOICE;waid=${config.ownerNumber}:${config.ownerNumber}\n` + 'END:VCARD';
+                    await sock.sendMessage(from, { contacts: { displayName: 'WRONG TURN 6 ✔️', contacts: [{ vcard }] } });
 
-                    const menu = `┏━━━━『 *WRONG TURN 6* 』━━━━┓
-┃ 👤 *Dev:* STANYTZ ✔️
-┃ 🚀 *Status:* Overlord Online
+                    const menu = `┏━━━━ 『 *WRONG TURN 6* 』 ━━━━┓
+┃ 👤 *Developer:* STANYTZ ✔️
+┃ ⚡ *Mode:* Super-System
 ┗━━━━━━━━━━━━━━━━━━━━━━┛
 
-🌸 *⚙️ USER SETTINGS* 🌸
-┃ ➥ .settings (View My Config)
-┃ ➥ .set [feature] (Toggle ON/OFF)
-
-🌸 *💰 WEALTH HUB* 🌸
+  『 *💰 WEALTH HUB* 』
 ┃ ➥ .livescore (Live Football)
+┃ ➥ .arbitrage (Crypto Gaps)
 ┃ ➥ .forex (Live Signals)
 ┃ ➥ .crypto (Binance Price)
 ┃ ➥ .odds (Sure 2+ Tips)
-┃ ➥ .jobs (Remote Work)
 
-🌸 *🎬 DOWNLOAD HUB* 🌸
+  『 *🎬 DOWNLOAD HUB* 』
 ┃ ➥ .tt (TikTok HD)
 ┃ ➥ .ig (Insta Reels)
 ┃ ➥ .yt (YouTube Master)
 ┃ ➥ .spotify (HQ Music)
-┃ ➥ .movie (Search Info)
+┃ ➥ .fb (Facebook DL)
 
-🌸 *🛡️ ADMIN HUB* 🌸
+  『 *🛡️ ADMIN HUB* 』
 ┃ ➥ .tagall (Broadcast)
 ┃ ➥ .hidetag (Ghost Tag)
 ┃ ➥ .kick / .add / .promote
 ┃ ➥ .antilink (ON/OFF)
+┃ ➥ .settings (Config)
 
-🌸 *🧠 INTELLECT HUB* 🌸
-┃ ➥ .gpt (Advanced AI)
-┃ ➥ .solve (Math solver)
-┃ ➥ .wiki (Encyclopedia)
-┃ ➥ .translate (100+ Lang)
-
-┗━━━━━━━━━━━━━━━━━━━━━━┛
-🌸 *Powered by STANYTZ*`;
+━━━━━━━━━━━━━━━━━━━━━━
+🌸 *Follow:* ${config.channelLink}`;
                     await sock.sendMessage(from, { image: { url: config.menuImage }, caption: menu });
                     break;
 
-                case 'settings':
-                    const sets = `⚙️ *YOUR BOT CONFIG:* @${sender.split('@')[0]}\n\n1. Anti-Link: ${user.antiLink ? '✅' : '❌'}\n2. Anti-Delete: ${user.antiDelete ? '✅' : '❌'}\n3. Status View: ${user.autoStatusView ? '✅' : '❌'}\n4. View-Once Bypass: ${user.viewOnceBypass ? '✅' : '❌'}\n\n*Use .set [name] to toggle!*`;
-                    await sock.sendMessage(from, { text: sets, mentions: [sender] });
+                case 'tt':
+                    const res = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${q}`);
+                    await sock.sendMessage(from, { video: { url: res.data.video.noWatermark }, caption: "Done." });
                     break;
-
-                case 'set':
-                    if (q === 'antilink') user.antiLink = !user.antiLink;
-                    if (q === 'antidelete') user.antiDelete = !user.antiDelete;
-                    await user.save();
-                    await sock.sendMessage(from, { text: `✅ *Settings Updated for ${q}*` });
-                    break;
-
-                case 'restart':
-                    if (from.includes(config.ownerNumber)) process.exit();
+                
+                case 'ping':
+                    await sock.sendMessage(from, { text: "Pong! Speed: 0.001ms" });
                     break;
             }
         }
-    });
-
-    // 5. ANTI-DELETE ENGINE
-    sock.ev.on("messages.update", async (u) => {
-        for (const update of u) {
-            if (update.update.protocolMessage && update.update.protocolMessage.type === 3) {
-                const key = update.update.protocolMessage.key;
-                const old = msgCache[key.id];
-                if (old) {
-                    await sock.sendMessage(sock.user.id, { text: `🛡️ *Anti-Delete:* Message from @${key.remoteJid.split('@')[0]} was deleted.\n\nContent: ${old.message.conversation || "Media File"}`, mentions: [key.remoteJid] });
-                    await sock.sendMessage(sock.user.id, { forward: old });
-                }
-            }
-        }
-    });
-
-    sock.ev.on("connection.update", (u) => {
-        if (u.connection === "open") sock.sendPresenceUpdate('available'); 
-        if (u.connection === "close") startEngine();
     });
 }
 
-app.get("/get-pair", (req, res) => startEngine(req.query.num, res));
-app.listen(port, () => startEngine());
+// 4. WEB PAIRING ENDPOINT
+app.get("/get-code", (req, res) => startEngine(req.query.num, res));
+app.listen(port, () => {
+    console.log(`StanyTz Server running on port ${port}`);
+    startEngine(); 
+});
