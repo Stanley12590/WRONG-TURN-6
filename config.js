@@ -1,14 +1,11 @@
-require('.env').config();
-
 module.exports = {
-    botName: process.env.BOT_NAME || "WRONG TURN 6",
-    developer: process.env.DEVELOPER || "STANYTZ",
-    prefix: process.env.PREFIX || ".",
-    ownerNumber: process.env.OWNER_NUMBER || "255618558502",
-    mongoUri: process.env.MONGO_URI,
-    channelLink: process.env.CHANNEL_LINK,
-    groupLink: process.env.GROUP_LINK,
-    groupId: process.env.GROUP_ID,
-    menuImage: process.env.MENU_IMAGE,
-    port: process.env.PORT || 3001
+    botName: "WRONG TURN 6",
+    ownerName: "STANYTZ",
+    ownerNumber: "255618558502", 
+    prefix: ".",
+    mongoUri: "mongodb+srv://stanytz076:stanytz076@cluster0.ennpt6t.mongodb.net/WrongTurn6?retryWrites=true&w=majority&appName=Cluster0",
+    channelLink: "https://whatsapp.com/channel/0029Vb7fzu4EwEjmsD4Tzs1p",
+    groupLink: "https://chat.whatsapp.com/J19JASXoaK0GVSoRvShr4Y",
+    groupId: "120363302194515518@g.us", // Use .jid command to verify
+    menuImage: "https://i.ibb.co/vz6mD7y/wrongturn.jpg"
 };
