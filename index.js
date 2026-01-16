@@ -1,15 +1,12 @@
-const { 
-    default: makeWASocket, delay, makeCacheableSignalKeyStore, 
-    DisconnectReason, initAuthCreds, useMultiFileAuthState 
-} = require("@whiskeysockets/baileys");
+const { default: makeWASocket, delay, makeCacheableSignalKeyStore, DisconnectReason, initAuthCreds } = require("@whiskeysockets/baileys");
 const express = require("express");
 const pino = require("pino");
 const mongoose = require("mongoose");
+const fs = require("fs");
+const path = require("path");
 const config = require("./config");
 const { Session } = require("./database");
 const { commandHandler } = require("./handler");
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(express.static('public'));
@@ -17,7 +14,6 @@ app.use(express.static('public'));
 let sock;
 global.commands = new Map();
 
-// --- 1. DYNAMIC COMMAND LOADER ---
 const loadCommands = () => {
     const commandsPath = path.join(__dirname, 'commands');
     if (!fs.existsSync(commandsPath)) return;
@@ -32,33 +28,22 @@ const loadCommands = () => {
             }
         }
     }
-    console.log(`✅ Loaded ${global.commands.size} Commands`);
+    console.log(`✅ ${global.commands.size} Commands Operational.`);
 };
 
-// --- 2. MONGODB AUTH STATE ---
 async function useMongoDBAuthState() {
-    let session = await Session.findOne({ id: "stanytz_wt6_session" });
+    let session = await Session.findOne({ id: "stanytz_wt6_matrix" });
     const creds = session ? session.creds : initAuthCreds();
     return {
-        state: {
-            creds,
-            keys: makeCacheableSignalKeyStore(creds, pino({ level: "silent" }))
-        },
+        state: { creds, keys: makeCacheableSignalKeyStore(creds, pino({ level: "silent" })) },
         saveCreds: async () => {
-            await Session.findOneAndUpdate(
-                { id: "stanytz_wt6_session" },
-                { creds },
-                { upsert: true }
-            );
+            await Session.findOneAndUpdate({ id: "stanytz_wt6_matrix" }, { creds }, { upsert: true });
         }
     };
 }
 
-async function startBot() {
-    if (mongoose.connection.readyState !== 1) {
-        await mongoose.connect(config.mongoUri);
-    }
-
+async function startEngine(num = null, res = null) {
+    if (mongoose.connection.readyState !== 1) await mongoose.connect(config.mongoUri);
     const { state, saveCreds } = await useMongoDBAuthState();
 
     sock = makeWASocket({
@@ -71,16 +56,26 @@ async function startBot() {
 
     sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect } = update;
+    if (!sock.authState.creds.registered && num) {
+        try {
+            await delay(15000); // 15s delay to fix Precondition/FAIL errors
+            const code = await sock.requestPairingCode(num.trim());
+            if (res && !res.headersSent) res.json({ code });
+        } catch (e) {
+            if (res && !res.headersSent) res.status(500).json({ error: "System Busy" });
+        }
+    }
+
+    sock.ev.on("connection.update", async (u) => {
+        const { connection, lastDisconnect } = u;
         if (connection === "open") {
-            console.log("🚀 WRONG TURN 6: CONNECTED!");
-            await sock.sendPresenceUpdate('available'); 
-            await sock.sendMessage(sock.user.id, { text: "🚀 *WRONG TURN 6 IS LIVE!* \n\nSession secured in MongoDB Cloud. Bot will not logout." });
+            console.log("🚀 WRONG TURN 6 CONNECTED");
+            await sock.sendPresenceUpdate('available');
+            const welcome = `🚀 *WRONG TURN 6 IS LIVE* 🚀\n\n*Developer:* STANYTZ ✔️\n*Status:* Cloud Secured ✅\n\n*SYSTEM READY:*\n1. Type *.menu* to see 500+ Hubs.\n2. Commands for Hackers, Students, and Bettors are active.\n3. Anti-Delete & View-Once are [ENABLED].\n\n_Enjoy the Matrix._`;
+            await sock.sendMessage(sock.user.id, { text: welcome });
         }
         if (connection === "close") {
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            if (reason !== DisconnectReason.loggedOut) startBot();
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startEngine();
         }
     });
 
@@ -89,27 +84,6 @@ async function startBot() {
     });
 }
 
-// --- 3. WEB API ---
-app.get("/get-code", async (req, res) => {
-    const num = req.query.num;
-    if (!num) return res.status(400).json({ error: "Number required" });
-
-    try {
-        if (!sock || sock.authState.creds.registered) {
-            return res.json({ error: "Bot already linked or engine not ready. Restart Render." });
-        }
-        // Subiri sekunde 10 ili socket itulize connection
-        await delay(10000); 
-        const code = await sock.requestPairingCode(num.trim());
-        res.json({ code: code });
-    } catch (err) {
-        res.status(500).json({ error: "Engine Busy. Try again in 30s." });
-    }
-});
-
 loadCommands();
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server live on ${PORT}`);
-    startBot();
-});
+app.get("/get-code", (req, res) => startEngine(req.query.num, res));
+app.listen(process.env.PORT || 3000, () => startEngine());
