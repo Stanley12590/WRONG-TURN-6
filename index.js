@@ -7,13 +7,11 @@ const { createBotSession, botSessions } = require('./bot-manager');
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
 // Global variables
 global.bots = new Map();
-
-// Connect to database
-connectDB();
 
 // Routes
 app.get('/', (req, res) => {
@@ -48,7 +46,7 @@ app.post('/api/pair', async (req, res) => {
         if (botSessions.has(cleanNumber)) {
             return res.json({
                 status: 'already_connected',
-                message: 'Bot is already connected'
+                message: 'Bot is already connected with this number'
             });
         }
         
@@ -56,7 +54,8 @@ app.post('/api/pair', async (req, res) => {
         const user = await User.findOne({ phoneNumber: cleanNumber });
         if (user?.banned) {
             return res.status(403).json({
-                error: 'You are banned from using this bot'
+                error: 'You are banned from using this bot',
+                contact: config.ownerNumber
             });
         }
         
@@ -111,7 +110,8 @@ app.post('/api/confirm-join', async (req, res) => {
             return res.status(400).json({ error: 'Session ID and phone number required' });
         }
         
-        const session = await Session.findOne({ sessionId, phoneNumber });
+        const cleanNumber = phoneNumber.replace(/\D/g, '');
+        const session = await Session.findOne({ sessionId, phoneNumber: cleanNumber });
         
         if (!session) {
             return res.status(404).json({ error: 'Session not found' });
@@ -125,7 +125,7 @@ app.post('/api/confirm-join', async (req, res) => {
         
         // Update user
         await User.findOneAndUpdate(
-            { phoneNumber },
+            { phoneNumber: cleanNumber },
             { 
                 joinedGroup: true,
                 joinedChannel: true,
@@ -140,7 +140,7 @@ app.post('/api/confirm-join', async (req, res) => {
             res.json({
                 success: true,
                 message: '✅ Bot connected successfully!',
-                phoneNumber
+                phoneNumber: cleanNumber
             });
         } else {
             res.status(500).json({ error: 'Failed to start bot' });
@@ -178,6 +178,54 @@ app.get('/api/session/:phoneNumber', async (req, res) => {
     }
 });
 
+// Disconnect session
+app.post('/api/disconnect', async (req, res) => {
+    try {
+        const { phoneNumber } = req.body;
+        
+        if (!phoneNumber) {
+            return res.status(400).json({ error: 'Phone number required' });
+        }
+        
+        const cleanNumber = phoneNumber.replace(/\D/g, '');
+        
+        // Remove bot session
+        const bot = botSessions.get(cleanNumber);
+        if (bot && bot.socket) {
+            bot.socket.end();
+        }
+        botSessions.delete(cleanNumber);
+        
+        // Update database
+        await Session.findOneAndUpdate(
+            { phoneNumber: cleanNumber },
+            { status: 'inactive' }
+        );
+        
+        res.json({
+            success: true,
+            message: 'Bot disconnected successfully'
+        });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get active sessions
+app.get('/api/sessions', (req, res) => {
+    const sessions = Array.from(botSessions.entries()).map(([phone, data]) => ({
+        phoneNumber: phone,
+        connectedAt: data.connectedAt,
+        status: 'active'
+    }));
+    
+    res.json({
+        count: sessions.length,
+        sessions: sessions
+    });
+});
+
 // Start all active sessions on server start
 async function startActiveSessions() {
     try {
@@ -202,13 +250,64 @@ async function startActiveSessions() {
     }
 }
 
-// Start server
-const PORT = config.port || 3000;
-app.listen(PORT, async () => {
-    console.log(`🚀 ${config.botName} Server running on port ${PORT}`);
+// Connect to database and start server
+async function startServer() {
+    console.log(`🚀 Starting ${config.botName}...`);
     console.log(`👑 Developer: ${config.developer}`);
-    console.log(`🌐 Web Interface: http://localhost:${PORT}`);
+    
+    // Connect to MongoDB
+    try {
+        await connectDB();
+        console.log('✅ Database connected');
+    } catch (error) {
+        console.log('⚠️ Starting without database connection');
+    }
     
     // Start active sessions
     setTimeout(startActiveSessions, 2000);
-});
+    
+    // Start server with error handling
+    const PORT = process.env.PORT || config.port || 3000;
+    
+    // Check if port is available
+    const server = app.listen(PORT, () => {
+        console.log(`🌐 Server running on port ${PORT}`);
+        console.log(`📱 Web Interface: http://localhost:${PORT}`);
+    });
+    
+    // Handle server errors
+    server.on('error', (error) => {
+        if (error.code === 'EADDRINUSE') {
+            console.log(`❌ Port ${PORT} is already in use. Trying port ${Number(PORT) + 1}...`);
+            
+            // Try another port
+            const newPort = Number(PORT) + 1;
+            const newServer = app.listen(newPort, () => {
+                console.log(`🌐 Server running on port ${newPort}`);
+                console.log(`📱 Web Interface: http://localhost:${newPort}`);
+            });
+            
+            newServer.on('error', (err) => {
+                console.error('❌ Failed to start server:', err.message);
+                process.exit(1);
+            });
+        } else {
+            console.error('❌ Server error:', error);
+            process.exit(1);
+        }
+    });
+    
+    // Handle graceful shutdown
+    process.on('SIGTERM', () => {
+        console.log('🛑 SIGTERM received. Shutting down gracefully...');
+        server.close(() => {
+            console.log('✅ Server closed');
+            process.exit(0);
+        });
+    });
+}
+
+// Start everything
+startServer();
+
+module.exports = app;
