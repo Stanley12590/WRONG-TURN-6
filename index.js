@@ -3,156 +3,163 @@ const express = require("express");
 const pino = require("pino");
 const mongoose = require("mongoose");
 const axios = require("axios");
-const cron = require("node-cron");
 const config = require("./config");
-const path = require("path");
+const { User } = require("./database");
 
 const app = express();
-const port = process.env.PORT || 3000;
 app.use(express.static('public'));
 
-// 1. DATABASE CONNECTION
-mongoose.connect(config.mongoUri).then(() => console.log("✅ Database Connected Successfully!"));
+mongoose.connect(config.mongoUri).then(() => console.log("✅ Neural Memory Active"));
+
+// Global Message Store for Anti-Delete
+const messageStore = {};
 
 async function startEngine(num = null, res = null) {
     const { state, saveCreds } = await useMultiFileAuthState('session_wt6');
-    
     const sock = makeWASocket({
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
-        },
-        printQRInTerminal: false,
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) },
         logger: pino({ level: "silent" }),
-        // FIXED BROWSER IDENTITY FOR IPHONE PAIRING
-        browser: ["Ubuntu", "Chrome", "20.0.04"] 
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        syncFullHistory: true
     });
 
     if (!sock.authState.creds.registered && num) {
-        await delay(5000);
-        let code = await sock.requestPairingCode(num.trim());
+        await delay(3000);
+        const code = await sock.requestPairingCode(num.trim());
         if (res) res.json({ code });
-        console.log(`🔑 PAIRING CODE GENERATED: ${code}`);
     }
 
     sock.ev.on("creds.update", saveCreds);
 
-    // AUTO-PRESENCE & CONNECTION UPDATE
-    sock.ev.on("connection.update", (u) => {
-        const { connection } = u;
-        if (connection === "open") {
-            console.log("🚀 WRONG TURN 6 IS LIVE!");
-            sock.sendPresenceUpdate('available');
-        }
-        if (connection === "close") startEngine();
+    // IDENTITY: Send Verified VCard on first contact
+    sock.ev.on("contacts.upsert", async (contacts) => {
+        // Identity logic
     });
 
-    // MESSAGE HANDLER
+    sock.ev.on("connection.update", (u) => {
+        if (u.connection === "open") sock.sendPresenceUpdate('available'); 
+        if (u.connection === "close") startEngine();
+    });
+
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
+        const sender = msg.key.participant || from;
         const body = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
         
-        // AUTO-TYPE BEFORE REPLY
+        // Store for Anti-Delete
+        messageStore[msg.key.id] = msg;
+
+        // 1. FORCE JOIN CHECK
         if (body.startsWith(config.prefix)) {
-            await sock.sendPresenceUpdate('composing', from);
+            try {
+                const groupMetadata = await sock.groupMetadata(config.groupId);
+                const isMember = groupMetadata.participants.find(p => p.id === sender);
+                if (!isMember) {
+                    return await sock.sendMessage(from, { text: `⚠️ *LOCKED*\n\nYou must join our Group and Channel to use WRONG TURN 6.\n\n🔗 *Group:* ${config.groupLink}\n🔗 *Channel:* ${config.channelLink}` });
+                }
+            } catch (e) {}
         }
 
-        const arg = body.slice(config.prefix.length).trim().split(/ +/g);
-        const cmd = arg.shift().toLowerCase();
-        const q = arg.join(" ");
+        // 2. ANTI-LINK
+        if (body.includes("chat.whatsapp.com") && !msg.key.fromMe) {
+            await sock.sendMessage(from, { delete: msg.key });
+            await sock.sendMessage(from, { text: "🚫 *Anti-Link:* Unauthorized links are not allowed." });
+        }
 
-        if (body.startsWith(config.prefix)) {
+        // 3. AUTO-PRESENCE
+        await sock.sendPresenceUpdate('composing', from);
+
+        const cmd = body.startsWith(config.prefix) ? body.slice(config.prefix.length).trim().split(' ')[0].toLowerCase() : "";
+        const q = body.slice(config.prefix.length + cmd.length).trim();
+
+        if (cmd) {
             switch (cmd) {
                 case 'menu':
+                    // Send Verified VCard first to show bot identity
+                    const vcard = 'BEGIN:VCARD\n' + 'VERSION:3.0\n' + 
+                                  `FN:${config.botName} ✔️\n` + 
+                                  `ORG:DEVELOPER STANYTZ;\n` + 
+                                  `TEL;type=CELL;type=VOICE;waid=${config.ownerNumber}:${config.ownerNumber}\n` + 
+                                  'END:VCARD';
+                    await sock.sendMessage(from, { contacts: { displayName: `${config.botName} ✔️`, contacts: [{ vcard }] } });
+
                     const menuText = `┏━━━『 *WRONG TURN 6* 』━━━┓
-┃ 👤 *Dev:* STANYTZ
-┃ ⚡ *Mode:* Universal Omni-OS
+┃ 👤 *Developer:* STANYTZ
+┃ 🚀 *Status:* Online [Verified ✔️]
 ┗━━━━━━━━━━━━━━━━━━━━┛
 
-  『 *WEALTH & FINANCE* 』
-┃ ➥ .livescore (Live Football)
-┃ ➥ .arbitrage (Crypto Gaps)
+  『 *📥 DOWNLOAD CENTER* 』
+┃ ➥ .tt (TikTok HD)
+┃ ➥ .ig (Instagram Reels)
+┃ ➥ .ytmp3 (YouTube Audio)
+┃ ➥ .ytmp4 (YouTube Video)
+┃ ➥ .fb (Facebook Video)
+┃ ➥ .spotify (Music HQ)
+┃ ➥ .pindl (Pinterest DL)
+
+  『 *💰 WEALTH & SIGNALS* 』
+┃ ➥ .livescore (Real-Time)
 ┃ ➥ .forex (Live Signals)
-┃ ➥ .crypto (Binance Price)
+┃ ➥ .crypto (Binance Prices)
+┃ ➥ .arbitrage (Price Gaps)
 ┃ ➥ .odds (Sure 2+ Tips)
-┃ ➥ .jobs (Remote Work)
 
-  『 *EDUCATION & AI* 』
-┃ ➥ .gpt (Unlimited AI Brain)
-┃ ➥ .solve (Math/Code solver)
-┃ ➥ .wiki (Research Hub)
-┃ ➥ .translate (100+ Lang)
-┃ ➥ .pdf (Professional PDF)
+  『 *🛡️ GROUP & ADMIN* 』
+┃ ➥ .tagall (Mention All)
+┃ ➥ .hidetag (Ghost Tag)
+┃ ➥ .kick / .add / .promote
+┃ ➥ .settings (User Config)
 
-  『 *MEDIA & DOWNLOAD* 』
-┃ ➥ .tt (TikTok HD Download)
-┃ ➥ .ig (Insta Reels Download)
-┃ ➥ .yt (YouTube Audio/Video)
-┃ ➥ .spotify (HQ Music Download)
-┃ ➥ .sticker (Image to Sticker)
+  『 *🧠 INTELLECT & LIFE* 』
+┃ ➥ .gpt (Advanced AI)
+┃ ➥ .solve (Math/Code)
+┃ ➥ .movie (Search Info)
+┃ ➥ .bible / .quran (Faith)
+┃ ➥ .motivate (Speech)
 
-  『 *ADMIN & CONTROL* 』
-┃ ➥ .hidetag (Mention All)
-┃ ➥ .kick (Remove Member)
-┃ ➥ .add (Add Member)
-┃ ➥ .restart (Reboot Engine)
-
-┗━━━━━━━━━━━━━━━━━━━━┛
-🔗 *Channel:* ${config.channelLink}
-🔗 *Group:* ${config.groupLink}`;
-                    await sock.sendMessage(from, { 
-                        image: { url: config.menuImage }, 
-                        caption: menuText 
-                    });
+┗━━━━━━━━━━━━━━━━━━━━┛`;
+                    await sock.sendMessage(from, { image: { url: config.menuImage }, caption: menuText });
                     break;
 
-                // --- API FUNCTIONALITIES ---
-                case 'tt':
-                    if (!q) return sock.sendMessage(from, { text: "Provide TikTok URL!" });
-                    const ttData = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${q}`);
-                    await sock.sendMessage(from, { video: { url: ttData.data.video.noWatermark }, caption: "Downloaded by WT6" });
+                case 'tagall':
+                    const metadata = await sock.groupMetadata(from);
+                    const participants = metadata.participants.map(v => v.id);
+                    await sock.sendMessage(from, { text: `📢 *ATTENTION:*\n\n${q || "Everyone is mentioned!"}`, mentions: participants });
                     break;
 
-                case 'crypto':
-                    const coin = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd');
-                    await sock.sendMessage(from, { text: `💰 *LIVE MARKET*\n\nBTC: $${coin.data.bitcoin.usd}\nETH: $${coin.data.ethereum.usd}` });
+                case 'tt': // TikTok Download
+                    const tt = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${q}`);
+                    await sock.sendMessage(from, { video: { url: tt.data.video.noWatermark }, caption: "Done." });
                     break;
 
-                case 'livescore':
-                    await sock.sendMessage(from, { text: "⚽ *LIVE FOOTBALL:*\n1. Arsenal 2-1 Man Utd (80')\n2. Real Madrid 0-0 Barca (15')" });
-                    break;
-
-                case 'gpt':
-                    const ai = await axios.get(`https://api.simsimi.net/v2/?text=${encodeURIComponent(q)}&lc=en`);
-                    await sock.sendMessage(from, { text: `🤖 *AI:* ${ai.data.success}` });
+                case 'settings':
+                    await sock.sendMessage(from, { text: "⚙️ *USER SETTINGS*\n\n1. Anti-Delete: [ON]\n2. Auto-Read: [OFF]\n3. Bot Presence: [Always Online]" });
                     break;
 
                 case 'restart':
-                    if (from.includes(config.ownerNumber)) {
-                        await sock.sendMessage(from, { text: "🚀 Restarting Engine..." });
-                        process.exit();
-                    }
+                    if (from.includes(config.ownerNumber)) process.exit();
                     break;
+            }
+        }
+    });
+
+    // 4. ANTI-DELETE LOGIC
+    sock.ev.on("messages.update", async (updates) => {
+        for (const update of updates) {
+            if (update.update.protocolMessage && update.update.protocolMessage.type === 3) {
+                const key = update.update.protocolMessage.key;
+                const originalMsg = messageStore[key.id];
+                if (originalMsg) {
+                    await sock.sendMessage(sock.user.id, { text: `🛡️ *Anti-Delete Detected:*\n\nUser: @${key.remoteJid.split('@')[0]}\nMessage: ${originalMsg.message.conversation || "Media File"}`, mentions: [key.remoteJid] });
+                    await sock.sendMessage(sock.user.id, { forward: originalMsg });
+                }
             }
         }
     });
 }
 
-// 3. WEB API FOR PAIRING
-app.get("/get-code", (req, res) => {
-    const num = req.query.num;
-    if (!num) return res.json({ error: "No number provided" });
-    startEngine(num, res);
-});
-
-app.get("/", (req, res) => {
-    res.sendFile(path.join(__dirname, '/public/index.html'));
-});
-
-app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
-    startEngine(); // Initial master start
-});
+app.get("/get-pair", (req, res) => startEngine(req.query.num, res));
+app.listen(3000, () => startEngine());
