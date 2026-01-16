@@ -1,4 +1,11 @@
-const { default: makeWASocket, useMultiFileAuthState, Browsers, delay, makeCacheableSignalKeyStore } = require("@whiskeysockets/baileys");
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    Browsers, 
+    delay, 
+    makeCacheableSignalKeyStore, 
+    DisconnectReason 
+} = require("@whiskeysockets/baileys");
 const express = require("express");
 const pino = require("pino");
 const mongoose = require("mongoose");
@@ -8,54 +15,105 @@ const config = require("./config");
 const { commandHandler } = require("./handler");
 
 const app = express();
+const port = process.env.PORT || 3000;
 app.use(express.static('public'));
 
-mongoose.connect(config.mongoUri).then(() => console.log("✅ DATABASE OF STANY TZ CONNECTED"));
+// 1. DATABASE CONNECTION
+mongoose.connect(config.mongoUri)
+    .then(() => console.log("✅ WRONG TURN 6: DATABASE MATRIX CONNECTED"))
+    .catch(err => console.error("❌ DATABASE ERROR:", err));
 
+// 2. GLOBAL COMMAND LOADER (Inasoma Folders zote)
 global.commands = new Map();
-const loadCmds = () => {
-    const folders = fs.readdirSync('./commands');
-    for (const folder of folders) {
-        const files = fs.readdirSync(`./commands/${folder}`).filter(f => f.endsWith('.js'));
-        for (const file of files) {
-            const cmd = require(`./commands/${folder}/${file}`);
-            global.commands.set(cmd.name, cmd);
+const loadCommands = () => {
+    const commandsPath = path.join(__dirname, 'commands');
+    if (!fs.existsSync(commandsPath)) fs.mkdirSync(commandsPath);
+
+    const categories = fs.readdirSync(commandsPath);
+    for (const category of categories) {
+        const categoryPath = path.join(commandsPath, category);
+        if (fs.statSync(categoryPath).isDirectory()) {
+            const files = fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'));
+            for (const file of files) {
+                const cmd = require(path.join(categoryPath, file));
+                global.commands.set(cmd.name, cmd);
+            }
         }
     }
+    console.log(`📦 MATRIX RELOADED: ${global.commands.size} Commands Active`);
 };
+
+let sock; // Global socket variable
 
 async function startEngine(num = null, res = null) {
     const { state, saveCreds } = await useMultiFileAuthState('session_wt6');
-    const sock = makeWASocket({
-        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) },
+    
+    sock = makeWASocket({
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+        },
+        printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        browser: ["Ubuntu", "Chrome", "20.0.04"], // Safest for iPhone
         syncFullHistory: true
     });
 
+    // --- PAIRING CODE LOGIC (FIXED FOR FAIL ERROR) ---
     if (!sock.authState.creds.registered && num) {
-        await delay(12000); 
-        const code = await sock.requestPairingCode(num.trim());
-        if (res) res.json({ code });
+        try {
+            console.log(`STANYTZ: Requesting Pairing Code for ${num}...`);
+            await delay(15000); // 15 Seconds is CRITICAL for Render to stabilize
+            const code = await sock.requestPairingCode(num.trim());
+            if (res && !res.headersSent) {
+                res.json({ code: code });
+            }
+        } catch (error) {
+            console.error("❌ Pairing Error:", error.message);
+            if (res && !res.headersSent) {
+                res.status(500).json({ code: "RETRY", error: "System Busy. Wait 30s." });
+            }
+        }
     }
 
     sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", async (u) => {
-        if (u.connection === "open") {
-            console.log("🚀 WRONG TURN 6 LIVE");
-            // WELCOME MESSAGE & MANUAL TO OWNER
-            const welcome = `🚀 *WRONG TURN 6 CONNECTED SUCCESSFULLY!* 🚀\n\nDeveloper: *STANYTZ*\n\n*USER MANUAL:*\n1. Use .menu to see all hubs.\n2. Commands are split into Wealth, Edu, Hack, etc.\n3. Anti-Delete & View-Once are AUTO-ENABLED.\n\n*System Status:* ALWAYS ONLINE ✅`;
-            await sock.sendMessage(sock.user.id, { text: welcome });
+    // --- CONNECTION STATUS ---
+    sock.ev.on("connection.update", (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === "open") {
+            console.log("🚀 WRONG TURN 6 IS LIVE AND DANGEROUS!");
+            sock.sendPresenceUpdate('available'); // Always Online
         }
-        if (u.connection === "close") startEngine();
+        if (connection === "close") {
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            if (reason !== DisconnectReason.loggedOut) {
+                console.log("🔄 Reconnecting Neural Engine...");
+                startEngine();
+            }
+        }
     });
 
+    // --- MESSAGE UPSERT (Passes to Handler) ---
     sock.ev.on("messages.upsert", async ({ messages }) => {
         await commandHandler(sock, messages[0]);
     });
 }
 
-loadCmds();
-app.get("/get-code", (req, res) => startEngine(req.query.num, res));
-app.listen(3000, () => startEngine());
+// 3. API ENDPOINTS FOR WEB UI
+app.get("/get-code", (req, res) => {
+    const num = req.query.num;
+    if (!num) return res.status(400).json({ error: "Provide Number!" });
+    startEngine(num, res);
+});
+
+app.get("/", (req, res) => {
+    res.sendFile(path.join(__dirname, '/public/index.html'));
+});
+
+// 4. BOOT SYSTEM
+loadCommands();
+app.listen(port, () => {
+    console.log(`📡 Matrix Web Server Active on Port ${port}`);
+    startEngine(); // Initial master launch
+});
