@@ -1,278 +1,78 @@
-require('.env').config();
-const express = require('express');
-const config = require('./config');
-const { Session, User, connectDB } = require('./database');
-const { createBotSession, botSessions } = require('./bot-manager');
+const { default: makeWASocket, delay, makeCacheableSignalKeyStore, DisconnectReason, initAuthCreds } = require("@whiskeysockets/baileys");
+const express = require("express");
+const pino = require("pino");
+const mongoose = require("mongoose");
+const fs = require("fs");
+const path = require("path");
+const config = require("./config");
+const { Session } = require("./database");
+const { commandHandler } = require("./handler");
 
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// Routes
-app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/public/index.html');
-});
+let sock;
+global.commands = new Map();
 
-app.get('/api/status', (req, res) => {
-    res.json({
-        status: 'online',
-        botName: config.botName,
-        developer: config.developer,
-        activeSessions: botSessions.size,
-        timestamp: new Date().toISOString()
+// Dynamic Command Loader
+const loadCommands = () => {
+    const cmdPath = path.join(__dirname, 'commands');
+    if (!fs.existsSync(cmdPath)) return;
+    fs.readdirSync(cmdPath).forEach(dir => {
+        const folder = path.join(cmdPath, dir);
+        if (fs.statSync(folder).isDirectory()) {
+            fs.readdirSync(folder).filter(f => f.endsWith('.js')).forEach(file => {
+                const cmd = require(path.join(folder, file));
+                global.commands.set(cmd.name, cmd);
+            });
+        }
     });
-});
+};
 
-// Generate pairing code
-app.post('/api/pair', async (req, res) => {
-    try {
-        const { phoneNumber } = req.body;
-        
-        if (!phoneNumber) {
-            return res.status(400).json({ error: 'Phone number required' });
-        }
-        
-        const cleanNumber = phoneNumber.replace(/\D/g, '');
-        if (cleanNumber.length < 10) {
-            return res.status(400).json({ error: 'Invalid phone number' });
-        }
-        
-        // Check if already has active bot
-        if (botSessions.has(cleanNumber)) {
-            return res.json({
-                status: 'already_connected',
-                message: 'Bot is already connected with this number'
-            });
-        }
-        
-        // Check if banned
-        const user = await User.findOne({ phoneNumber: cleanNumber });
-        if (user?.banned) {
-            return res.status(403).json({
-                error: 'You are banned from using this bot',
-                contact: config.ownerNumber
-            });
-        }
-        
-        // Generate pairing code (6 digits)
-        const pairingCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const sessionId = `wt6_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
-        // Save session
-        const session = new Session({
-            sessionId,
-            phoneNumber: cleanNumber,
-            pairingCode,
-            status: 'pending',
-            joinedGroup: false,
-            joinedChannel: false
-        });
-        
-        await session.save();
-        
-        // Create user if doesn't exist
-        if (!user) {
-            await User.create({
-                userId: `${cleanNumber}@s.whatsapp.net`,
-                phoneNumber: cleanNumber,
-                name: `User_${cleanNumber.slice(-4)}`
-            });
-        }
-        
-        res.json({
-            success: true,
-            sessionId,
-            pairingCode,
-            message: `Pairing code for ${cleanNumber}`,
-            requireJoin: true,
-            groupLink: config.groupLink,
-            channelLink: config.channelLink,
-            instructions: '1. Open WhatsApp > Linked Devices > Link a Device\n2. Enter this code\n3. Join our group and channel to unlock commands'
-        });
-        
-    } catch (error) {
-        console.error('Pairing error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// Confirm join and start bot
-app.post('/api/confirm-join', async (req, res) => {
-    try {
-        const { sessionId, phoneNumber } = req.body;
-        
-        if (!sessionId || !phoneNumber) {
-            return res.status(400).json({ error: 'Session ID and phone number required' });
-        }
-        
-        const cleanNumber = phoneNumber.replace(/\D/g, '');
-        const session = await Session.findOne({ sessionId, phoneNumber: cleanNumber });
-        
-        if (!session) {
-            return res.status(404).json({ error: 'Session not found' });
-        }
-        
-        // Update session
-        session.joinedGroup = true;
-        session.joinedChannel = true;
-        session.status = 'active';
-        await session.save();
-        
-        // Update user
-        await User.findOneAndUpdate(
-            { phoneNumber: cleanNumber },
-            { 
-                joinedGroup: true,
-                joinedChannel: true,
-                lastActive: new Date()
-            }
-        );
-        
-        // Start bot
-        const botStarted = await createBotSession(session);
-        
-        if (botStarted) {
-            res.json({
-                success: true,
-                message: '✅ Bot connected successfully!',
-                phoneNumber: cleanNumber
-            });
-        } else {
-            res.status(500).json({ error: 'Failed to start bot' });
-        }
-        
-    } catch (error) {
-        console.error('Confirm join error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Check session status
-app.get('/api/session/:phoneNumber', async (req, res) => {
-    try {
-        const phoneNumber = req.params.phoneNumber.replace(/\D/g, '');
-        const session = await Session.findOne({ phoneNumber });
-        
-        if (!session) {
-            return res.status(404).json({ error: 'Session not found' });
-        }
-        
-        const isConnected = botSessions.has(phoneNumber);
-        
-        res.json({
-            phoneNumber: session.phoneNumber,
-            status: session.status,
-            joinedGroup: session.joinedGroup,
-            joinedChannel: session.joinedChannel,
-            connected: isConnected,
-            pairingCode: session.pairingCode
-        });
-        
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Disconnect session
-app.post('/api/disconnect', async (req, res) => {
-    try {
-        const { phoneNumber } = req.body;
-        
-        if (!phoneNumber) {
-            return res.status(400).json({ error: 'Phone number required' });
-        }
-        
-        const cleanNumber = phoneNumber.replace(/\D/g, '');
-        
-        // Remove bot session
-        const bot = botSessions.get(cleanNumber);
-        if (bot && bot.socket) {
-            bot.socket.end();
-        }
-        botSessions.delete(cleanNumber);
-        
-        // Update database
-        await Session.findOneAndUpdate(
-            { phoneNumber: cleanNumber },
-            { status: 'inactive' }
-        );
-        
-        res.json({
-            success: true,
-            message: 'Bot disconnected successfully'
-        });
-        
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Get active sessions
-app.get('/api/sessions', (req, res) => {
-    const sessions = Array.from(botSessions.entries()).map(([phone, data]) => ({
-        phoneNumber: phone,
-        connectedAt: data.connectedAt,
-        status: 'active'
-    }));
+async function startEngine(num = null, res = null) {
+    if (mongoose.connection.readyState !== 1) await mongoose.connect(config.mongoUri);
     
-    res.json({
-        count: sessions.length,
-        sessions: sessions
-    });
-});
+    // MONGODB AUTH LOGIC (No Local Files)
+    let cloud = await Session.findOne({ id: "stanytz_matrix_session" });
+    const creds = cloud ? cloud.creds : initAuthCreds();
 
-// Start all active sessions on server start
-async function startActiveSessions() {
-    try {
-        const activeSessions = await Session.find({ 
-            status: 'active',
-            joinedGroup: true,
-            joinedChannel: true
-        });
-        
-        console.log(`🔄 Starting ${activeSessions.length} active sessions...`);
-        
-        for (const session of activeSessions) {
-            try {
-                await createBotSession(session);
-                console.log(`✅ Started bot for: ${session.phoneNumber}`);
-            } catch (error) {
-                console.error(`❌ Failed to start ${session.phoneNumber}:`, error.message);
-            }
-        }
-    } catch (error) {
-        console.error('Error starting sessions:', error);
+    sock = makeWASocket({
+        auth: { creds, keys: makeCacheableSignalKeyStore(creds, pino({ level: "silent" })) },
+        logger: pino({ level: "silent" }),
+        browser: ["WRONG TURN 6", "Chrome", "20.0.04"],
+        syncFullHistory: true
+    });
+
+    sock.ev.on("creds.update", async () => {
+        await Session.findOneAndUpdate({ id: "stanytz_matrix_session" }, { creds: sock.authState.creds }, { upsert: true });
+    });
+
+    if (!sock.authState.creds.registered && num) {
+        await delay(15000); // 15s delay to fix FAIL error
+        try {
+            const code = await sock.requestPairingCode(num.trim());
+            if (res) res.json({ code });
+        } catch (e) { if (res) res.status(500).json({ error: "Matrix Choked" }); }
     }
-}
 
-// Function to start server on available port
-function startServerOnPort(port) {
-    const server = app.listen(port, () => {
-        console.log(`🚀 ${config.botName} Server running on port ${port}`);
-        console.log(`👑 Developer: ${config.developer}`);
-        console.log(`🌐 Web Interface: http://localhost:${port}`);
-        
-        // Connect to MongoDB
-        connectDB().then(() => {
-            console.log('✅ Database connected');
-            // Start active sessions
-            setTimeout(startActiveSessions, 2000);
-        }).catch(() => {
-            console.log('⚠️ Starting without database connection');
-        });
-    });
-    
-    server.on('error', (error) => {
-        if (error.code === 'EADDRINUSE') {
-            console.log(`❌ Port ${port} is already in use. Trying port ${port + 1}...`);
-            startServerOnPort(port + 1);
-        } else {
-            console.error('❌ Server error:', error);
-            process.exit(1);
+    sock.ev.on("connection.update", async (u) => {
+        const { connection, lastDisconnect } = u;
+        if (connection === "open") {
+            console.log("✅ WRONG TURN 6 CONNECTED");
+            await sock.sendPresenceUpdate('available');
+            const welcome = `🚀 *WRONG TURN 6 CONNECTED* 🚀\n\nWelcome Master *STANYTZ*.\n\n*STATUS:* Cloud Secured ✅\n*IDENTITY:* Verified Identity ✔️\n\n_System active. Type .menu to begin._`;
+            await sock.sendMessage(sock.user.id, { text: welcome });
         }
+        if (connection === "close") {
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startEngine();
+        }
+    });
+
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        await commandHandler(sock, messages[0]);
     });
 }
 
-// Start server on port 3001 (or next available)
-startServerOnPort(3001);
+loadCommands();
+app.get("/get-code", (req, res) => startEngine(req.query.num, res));
+app.listen(process.env.PORT || 3000, () => startEngine());
