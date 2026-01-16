@@ -250,64 +250,33 @@ async function startActiveSessions() {
     }
 }
 
-// Connect to database and start server
-async function startServer() {
-    console.log(`🚀 Starting ${config.botName}...`);
-    console.log(`👑 Developer: ${config.developer}`);
-    
-    // Connect to MongoDB
-    try {
-        await connectDB();
-        console.log('✅ Database connected');
-    } catch (error) {
-        console.log('⚠️ Starting without database connection');
-    }
-    
-    // Start active sessions
-    setTimeout(startActiveSessions, 2000);
-    
-    // Start server with error handling
-    const PORT = process.env.PORT || config.port || 3000;
-    
-    // Check if port is available
-    const server = app.listen(PORT, () => {
-        console.log(`🌐 Server running on port ${PORT}`);
-        console.log(`📱 Web Interface: http://localhost:${PORT}`);
+// Function to start server on available port
+function startServerOnPort(port) {
+    const server = app.listen(port, () => {
+        console.log(`🚀 ${config.botName} Server running on port ${port}`);
+        console.log(`👑 Developer: ${config.developer}`);
+        console.log(`🌐 Web Interface: http://localhost:${port}`);
+        
+        // Connect to MongoDB
+        connectDB().then(() => {
+            console.log('✅ Database connected');
+            // Start active sessions
+            setTimeout(startActiveSessions, 2000);
+        }).catch(() => {
+            console.log('⚠️ Starting without database connection');
+        });
     });
     
-    // Handle server errors
     server.on('error', (error) => {
         if (error.code === 'EADDRINUSE') {
-            console.log(`❌ Port ${PORT} is already in use. Trying port ${Number(PORT) + 1}...`);
-            
-            // Try another port
-            const newPort = Number(PORT) + 1;
-            const newServer = app.listen(newPort, () => {
-                console.log(`🌐 Server running on port ${newPort}`);
-                console.log(`📱 Web Interface: http://localhost:${newPort}`);
-            });
-            
-            newServer.on('error', (err) => {
-                console.error('❌ Failed to start server:', err.message);
-                process.exit(1);
-            });
+            console.log(`❌ Port ${port} is already in use. Trying port ${port + 1}...`);
+            startServerOnPort(port + 1);
         } else {
             console.error('❌ Server error:', error);
             process.exit(1);
         }
     });
-    
-    // Handle graceful shutdown
-    process.on('SIGTERM', () => {
-        console.log('🛑 SIGTERM received. Shutting down gracefully...');
-        server.close(() => {
-            console.log('✅ Server closed');
-            process.exit(0);
-        });
-    });
 }
 
-// Start everything
-startServer();
-
-module.exports = app;
+// Start server on port 3001 (or next available)
+startServerOnPort(3001);
