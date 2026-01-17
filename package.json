@@ -1,7 +1,7 @@
 {
   "name": "wrongturn6-bot",
   "version": "6.0.0",
-  "description": "Advanced WhatsApp Security Bot",
+  "description": "Advanced WhatsApp Security Bot with Firebase",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
