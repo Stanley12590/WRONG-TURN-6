@@ -1,14 +1,10 @@
-require('dotenv').config();
-const { default: makeWASocket, delay, makeCacheableSignalKeyStore, DisconnectReason, initAuthCreds, 
-        useMultiFileAuthState, fetchLatestBaileysVersion, makeInMemoryStore } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, delay, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const express = require("express");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
-const { Boom } = require('@hapi/boom');
 const config = require("./config");
-const { Session, User, Group, MessageLog } = require("./firebase");
-const { messageHandler } = require("./handler");
+const { Session, User, Group } = require("./firebase");
 
 const app = express();
 app.use(express.json());
@@ -17,409 +13,387 @@ app.use(express.static('public'));
 
 let sock = null;
 let isConnected = false;
-let reconnectAttempts = 0;
-const maxReconnectAttempts = 10;
-
 global.commands = new Map();
 global.config = config;
 
-// Store for messages (anti-delete)
-const store = makeInMemoryStore({ });
-store.readFromFile('./session/store.json');
-
-// Load commands
-const loadCommands = () => {
-    const cmdPath = path.join(__dirname, 'commands');
-    if (!fs.existsSync(cmdPath)) {
-        fs.mkdirSync(cmdPath, { recursive: true });
-        console.log("📁 Created commands folder");
+// Load Commands
+function loadCommands() {
+    const commandsDir = path.join(__dirname, 'commands');
+    
+    if (!fs.existsSync(commandsDir)) {
+        console.log("📁 Creating commands directory...");
+        fs.mkdirSync(commandsDir, { recursive: true });
         return;
     }
     
-    let commandCount = 0;
+    const commandFiles = fs.readdirSync(commandsDir)
+        .filter(file => file.endsWith('.js'));
     
-    // Load from root commands folder
-    fs.readdirSync(cmdPath).forEach(file => {
-        if (file.endsWith('.js')) {
-            try {
-                const cmd = require(path.join(cmdPath, file));
-                if (cmd && cmd.name && cmd.execute) {
-                    global.commands.set(cmd.name.toLowerCase(), cmd);
-                    if (cmd.alias) {
-                        cmd.alias.forEach(alias => {
-                            global.commands.set(alias.toLowerCase(), cmd);
-                        });
-                    }
-                    commandCount++;
-                    console.log(`✅ Loaded: ${cmd.name}`);
-                }
-            } catch (err) {
-                console.log(`❌ Error loading ${file}:`, err.message);
+    commandFiles.forEach(file => {
+        try {
+            const command = require(path.join(commandsDir, file));
+            if (command.name) {
+                global.commands.set(command.name.toLowerCase(), command);
+                console.log(`✅ Loaded: ${command.name}`);
             }
+        } catch (error) {
+            console.log(`❌ Error loading ${file}:`, error.message);
         }
     });
     
-    // Load from subfolders
-    fs.readdirSync(cmdPath).forEach(dir => {
-        const folder = path.join(cmdPath, dir);
-        if (fs.statSync(folder).isDirectory()) {
-            fs.readdirSync(folder).filter(f => f.endsWith('.js')).forEach(file => {
-                try {
-                    const cmd = require(path.join(folder, file));
-                    if (cmd && cmd.name && cmd.execute) {
-                        global.commands.set(cmd.name.toLowerCase(), cmd);
-                        if (cmd.alias) {
-                            cmd.alias.forEach(alias => {
-                                global.commands.set(alias.toLowerCase(), cmd);
-                            });
-                        }
-                        commandCount++;
-                        console.log(`✅ Loaded: ${cmd.name} from ${dir}`);
-                    }
-                } catch (err) {
-                    console.log(`❌ Error loading ${file}:`, err.message);
-                }
-            });
-        }
-    });
-    
-    console.log(`📦 Total commands: ${commandCount}`);
-};
-
-// ALWAYS ONLINE SYSTEM
-const maintainPresence = async () => {
-    if (!sock || !isConnected) return;
-    
-    try {
-        // Random presence updates
-        const presences = ['available', 'unavailable', 'composing', 'recording'];
-        const randomPresence = presences[Math.floor(Math.random() * presences.length)];
-        
-        await sock.sendPresenceUpdate(randomPresence);
-        
-        // Random typing in owner's chat
-        if (Math.random() > 0.7) {
-            await sock.sendPresenceUpdate('composing', config.ownerJid);
-            await delay(2000);
-            await sock.sendPresenceUpdate('paused', config.ownerJid);
-        }
-    } catch (error) {
-        // Silent fail
-    }
-};
-
-// AUTO STATUS VIEW SYSTEM
-const autoViewStatus = async () => {
-    if (!sock || !isConnected) return;
-    
-    try {
-        // Simulate status viewing
-        // Note: This is a placeholder - actual status viewing requires specific implementations
-        console.log("👁️ Auto status viewer active");
-    } catch (error) {
-        // Silent fail
-    }
-};
+    console.log(`📦 Total commands: ${global.commands.size}`);
+}
 
 // Connect to WhatsApp
 async function connectToWhatsApp() {
     try {
         console.log("🔄 Connecting to WhatsApp...");
         
-        // Load session
-        let sessionData = await Session.get(config.sessionName);
-        const creds = sessionData?.creds || initAuthCreds();
+        // Use Firebase for session storage
+        let savedSession = await Session.get(config.sessionName);
         
-        // Get latest version
+        const { state, saveCreds } = await useMultiFileAuthState('./session');
+        
+        if (savedSession?.creds) {
+            state.creds = savedSession.creds;
+        }
+        
         const { version } = await fetchLatestBaileysVersion();
         
         sock = makeWASocket({
             version,
-            auth: {
-                creds: creds,
-                keys: makeCacheableSignalKeyStore(creds, pino({ level: "silent" }))
-            },
+            auth: state,
             logger: pino({ level: "silent" }),
             printQRInTerminal: true,
             browser: ["WRONG TURN 6", "Chrome", "20.0.04"],
             syncFullHistory: false,
             generateHighQualityLinkPreview: true,
             markOnlineOnConnect: true,
-            emitOwnEvents: false,
-            defaultQueryTimeoutMs: 0,
-            connectTimeoutMs: 60000,
-            keepAliveIntervalMs: 10000, // Keep alive every 10 seconds
         });
         
-        // Bind store
-        store.bind(sock.ev);
+        // Save credentials when updated
+        sock.ev.on("creds.update", saveCreds);
         
-        // Save session updates
-        sock.ev.on("creds.update", async (newCreds) => {
-            try {
-                await Session.save(config.sessionName, newCreds);
-                console.log("💾 Session updated");
-            } catch (error) {
-                console.log("Session save error:", error.message);
-            }
+        sock.ev.on("creds.update", async (creds) => {
+            await Session.save(config.sessionName, { creds });
         });
         
-        // Handle connection
         sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
             if (qr) {
-                console.log("📱 Scan QR Code with WhatsApp");
+                console.log("📱 QR Code Generated - Scan with WhatsApp");
             }
             
             if (connection === "open") {
                 isConnected = true;
-                reconnectAttempts = 0;
-                
                 console.log("✅ WRONG TURN 6 CONNECTED!");
-                console.log(`👤 Bot: ${sock.user.id}`);
-                console.log(`📱 Platform: ${sock.user.platform}`);
+                console.log(`👤 User ID: ${sock.user.id}`);
+                console.log(`📱 Phone: ${sock.user.phone}`);
                 
-                // Start presence maintenance
-                setInterval(maintainPresence, 30000);
-                
-                // Start auto status viewing
-                if (config.autoStatusView) {
-                    setInterval(autoViewStatus, 60000);
-                }
+                // Auto typing presence
+                setInterval(async () => {
+                    if (sock && isConnected) {
+                        try {
+                            await sock.sendPresenceUpdate('composing');
+                        } catch (e) {}
+                    }
+                }, 30000);
                 
                 // Save bot info
                 await User.save(sock.user.id, {
                     name: sock.user.name || config.botName,
-                    pushName: sock.user.name,
-                    platform: sock.user.platform,
                     isBot: true,
                     isOwner: true,
-                    connectedAt: new Date().toISOString()
+                    joinedAt: new Date().toISOString()
                 });
                 
-                // Welcome message
-                const welcome = `🚀 *WRONG TURN 6 ACTIVATED* 🚀\n\n` +
-                               `*Owner:* ${config.ownerName}\n` +
-                               `*Status:* 🔥 Fully Operational\n` +
-                               `*Security:* Maximum Level\n` +
-                               `*Database:* Encrypted 🔐\n\n` +
-                               `✅ Anti-Delete: ${config.antiDelete ? 'ON' : 'OFF'}\n` +
-                               `✅ Anti-Link: ${config.antiLink ? 'ON' : 'OFF'}\n` +
-                               `✅ Anti-Porn: ${config.antiPorn ? 'ON' : 'OFF'}\n` +
-                               `✅ Swear Filter: ${config.swearFilter ? 'ON' : 'OFF'}\n` +
-                               `✅ View-Once Capture: ${config.viewOnceCapture ? 'ON' : 'OFF'}\n\n` +
-                               `_System ready for commands._`;
+                // Send welcome to owner
+                const welcome = `🚀 *WRONG TURN 6 ACTIVATED*\n\n` +
+                               `*Status:* Connected ✅\n` +
+                               `*Security:* Maximum Level 🔥\n` +
+                               `*Database:* Firebase 🔐\n\n` +
+                               `_System ready. Use ${config.prefix}menu_`;
                 
                 await sock.sendMessage(config.ownerJid, { text: welcome });
             }
             
             if (connection === "close") {
                 isConnected = false;
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const reason = lastDisconnect?.error?.output?.payload?.error || "Unknown";
+                const reason = new Error(lastDisconnect?.error)?.output?.statusCode;
                 
-                console.log("🔌 Connection closed:", reason);
-                
-                if (statusCode === DisconnectReason.loggedOut) {
-                    console.log("❌ Logged out - Manual restart required");
-                    process.exit(0);
+                if (reason === DisconnectReason.loggedOut) {
+                    console.log("❌ Logged out - Clear session folder");
+                    fs.rmSync('./session', { recursive: true, force: true });
                 } else {
-                    reconnectAttempts++;
-                    if (reconnectAttempts <= maxReconnectAttempts) {
-                        console.log(`🔄 Reconnecting... (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
-                        setTimeout(connectToWhatsApp, 5000);
-                    } else {
-                        console.log("❌ Max reconnection attempts reached");
-                        process.exit(1);
-                    }
+                    console.log("🔄 Reconnecting in 5 seconds...");
+                    setTimeout(connectToWhatsApp, 5000);
                 }
             }
         });
         
-        // Handle incoming messages
-        sock.ev.on("messages.upsert", async ({ messages, type }) => {
-            if (type === 'notify' && messages[0]) {
-                const msg = messages[0];
-                
-                // Log message for anti-delete
-                if (config.antiDelete) {
-                    await MessageLog.logMessage(msg);
-                }
-                
-                // Handle message
-                await messageHandler(sock, msg);
+        sock.ev.on("messages.upsert", async ({ messages }) => {
+            const msg = messages[0];
+            if (msg) {
+                await handleMessage(sock, msg);
             }
         });
-        
-        // Handle message deletions (ANTI-DELETE)
-        sock.ev.on("messages.delete", async (deletions) => {
-            if (!config.antiDelete) return;
-            
-            for (const deletion of deletions) {
-                try {
-                    const deletedMsg = await MessageLog.getDeletedMessage(deletion.keys[0].id);
-                    if (deletedMsg) {
-                        const sender = deletedMsg.sender;
-                        const chatName = deletion.keys[0].remoteJid.endsWith('@g.us') ? 'Group' : 'Private';
-                        
-                        let caption = `🚨 *DELETED MESSAGE DETECTED* 🚨\n\n` +
-                                     `*From:* ${sender}\n` +
-                                     `*Chat:* ${chatName}\n` +
-                                     `*Time:* ${new Date().toLocaleString()}\n`;
-                        
-                        // Extract text if available
-                        let messageText = '';
-                        if (deletedMsg.message?.conversation) {
-                            messageText = deletedMsg.message.conversation;
-                        } else if (deletedMsg.message?.extendedTextMessage?.text) {
-                            messageText = deletedMsg.message.extendedTextMessage.text;
-                        }
-                        
-                        if (messageText) {
-                            caption += `*Message:* ${messageText.substring(0, 200)}${messageText.length > 200 ? '...' : ''}`;
-                        }
-                        
-                        // Forward to owner
-                        await sock.sendMessage(config.ownerJid, {
-                            forward: { key: deletion.keys[0], message: deletedMsg.message },
-                            caption: caption
-                        });
-                        
-                        // Delete from log
-                        await MessageLog.deleteMessage(deletion.keys[0].id);
-                    }
-                } catch (error) {
-                    console.error("Anti-delete error:", error.message);
-                }
-            }
-        });
-        
-        // Handle group participants update
-        sock.ev.on("group-participants.update", async (update) => {
-            console.log("Group update:", update);
-        });
-        
-        return sock;
         
     } catch (error) {
         console.log("❌ Connection error:", error.message);
-        return null;
+        setTimeout(connectToWhatsApp, 10000);
     }
 }
 
-// Pairing Code System
-async function getPairingCode(phoneNumber) {
+// Handle incoming messages
+async function handleMessage(sock, msg) {
     try {
-        if (!sock || !sock.authState.creds.registered) {
-            // Create temporary connection for pairing
-            const tempSock = makeWASocket({
-                auth: { creds: initAuthCreds() },
-                logger: pino({ level: "silent" }),
-                printQRInTerminal: false,
-            });
+        if (!msg.message || msg.key.fromMe) return;
+        
+        const from = msg.key.remoteJid;
+        const sender = msg.key.participant || from;
+        const isGroup = from.endsWith('@g.us');
+        const pushName = msg.pushName || "User";
+        
+        // Extract message text
+        let body = "";
+        if (msg.message.conversation) body = msg.message.conversation;
+        else if (msg.message.extendedTextMessage?.text) body = msg.message.extendedTextMessage.text;
+        else if (msg.message.imageMessage?.caption) body = msg.message.imageMessage.caption;
+        else if (msg.message.videoMessage?.caption) body = msg.message.videoMessage.caption;
+        
+        body = body.trim();
+        
+        // Save user
+        await User.save(sender, {
+            name: pushName,
+            jid: sender,
+            pushName: pushName,
+            lastSeen: new Date().toISOString()
+        });
+        
+        // FORCE JOIN SYSTEM - MUST JOIN GROUP & CHANNEL
+        if (body.startsWith(config.prefix) && sender !== config.ownerJid) {
+            const user = await User.get(sender);
             
-            const code = await tempSock.requestPairingCode(phoneNumber.trim());
-            await tempSock.ws.close();
-            return { success: true, code };
+            // Check if user has joined group and channel
+            if (!user?.hasJoinedGroup || !user?.hasJoinedChannel) {
+                const joinMessage = `🔐 *ACCESS DENIED* 🔐\n\n` +
+                                   `You must join our Group & Channel to use commands:\n\n` +
+                                   `📢 *GROUP:* ${config.groupLink}\n` +
+                                   `📡 *CHANNEL:* ${config.channelLink}\n\n` +
+                                   `⚠️ _After joining, send ${config.prefix}verify in the group_`;
+                
+                await sock.sendMessage(from, { text: joinMessage });
+                return;
+            }
         }
         
-        const code = await sock.requestPairingCode(phoneNumber.trim());
-        return { success: true, code };
+        // AUTO STATUS VIEW & REACT
+        if (from === 'status@broadcast') {
+            await sock.readMessages([msg.key]);
+            await sock.sendMessage(from, {
+                react: { text: "❤️", key: msg.key }
+            });
+            
+            // Auto reply to status
+            if (body) {
+                await sock.sendMessage(sender, {
+                    text: `👀 Saw your status update! "${body.substring(0, 50)}${body.length > 50 ? '...' : ''}"`
+                });
+            }
+            return;
+        }
+        
+        // VIEW-ONCE AUTO CAPTURE
+        if (msg.message.viewOnceMessage || msg.message.viewOnceMessageV2) {
+            const mediaType = msg.message.viewOnceMessage ? 
+                Object.keys(msg.message.viewOnceMessage.message)[0] :
+                Object.keys(msg.message.viewOnceMessageV2.message)[0];
+            
+            // Forward to owner with details
+            await sock.sendMessage(config.ownerJid, {
+                forward: msg,
+                caption: `🔓 VIEW-ONCE CAPTURED\n\n` +
+                        `From: ${pushName}\n` +
+                        `Chat: ${isGroup ? 'Group' : 'Private'}\n` +
+                        `Type: ${mediaType}\n` +
+                        `Time: ${new Date().toLocaleString()}`
+            });
+            
+            await sock.sendMessage(from, {
+                text: `⚠️ View-once media captured by security system`
+            });
+            return;
+        }
+        
+        // ANTI-LINK PROTECTION (ALL LINKS)
+        if (config.antiLink && body) {
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            const links = body.match(urlRegex);
+            
+            if (links && links.length > 0) {
+                await sock.sendMessage(from, { delete: msg.key });
+                
+                await sock.sendMessage(from, {
+                    text: `🚫 *LINK REMOVED*\n\nLinks are not allowed.\n\n` +
+                          `User: @${sender.split('@')[0]}\n` +
+                          `Action: Message deleted`
+                });
+                
+                await sock.sendMessage(config.ownerJid, {
+                    text: `🚫 Link deleted from ${pushName}\n` +
+                          `Chat: ${from}\n` +
+                          `Link: ${links[0]}`
+                });
+                return;
+            }
+        }
+        
+        // ANTI-SWEAR FILTER (Kiswahili)
+        if (config.swearFilter && body) {
+            const swearWords = [
+                'mavi', 'kuma', 'mate', 'chuma', 'mnyiri', 'mtama',
+                'wazimu', 'pumbavu', 'fala', 'jinga', 'shupavu',
+                'mchepu', 'mshenzi', 'mbwa', 'punda'
+            ];
+            
+            const hasSwear = swearWords.some(word => 
+                body.toLowerCase().includes(word.toLowerCase())
+            );
+            
+            if (hasSwear) {
+                await sock.sendMessage(from, { delete: msg.key });
+                
+                await sock.sendMessage(from, {
+                    text: `⚠️ *LANGUAGE VIOLATION*\n\n` +
+                          `Swear words are not allowed.\n\n` +
+                          `User: @${sender.split('@')[0]}\n` +
+                          `Action: Message deleted`
+                });
+                return;
+            }
+        }
+        
+        // AUTO TYPING
+        if (config.autoTyping && Math.random() > 0.7) {
+            await sock.sendPresenceUpdate('composing', from);
+            setTimeout(async () => {
+                await sock.sendPresenceUpdate('paused', from);
+            }, 2000);
+        }
+        
+        // AUTO REPLY TO VOICE
+        if (msg.message.audioMessage) {
+            await sock.sendMessage(from, {
+                text: `🎤 Voice note received (${msg.message.audioMessage.seconds || 0}s)`
+            });
+        }
+        
+        // COMMAND HANDLER
+        if (body.startsWith(config.prefix)) {
+            const args = body.slice(config.prefix.length).trim().split(/ +/);
+            const cmd = args.shift().toLowerCase();
+            const command = global.commands.get(cmd);
+            
+            if (command) {
+                console.log(`⚡ Command: ${cmd} from ${pushName}`);
+                
+                await sock.sendPresenceUpdate('composing', from);
+                await command.execute(sock, msg, args);
+            }
+        }
+        
     } catch (error) {
-        return { success: false, error: error.message };
+        console.log("Handler error:", error.message);
     }
 }
 
-// Initialize bot
-async function initBot() {
-    console.log("🤖 Initializing WRONG TURN 6...");
-    console.log("🔐 Security: Maximum Level");
-    console.log("💾 Database: Encrypted Firebase");
-    
-    // Load commands
-    loadCommands();
-    
-    // Connect to WhatsApp
-    await connectToWhatsApp();
-    
-    return true;
+// Generate REAL 8-digit pairing code
+async function generatePairingCode(phoneNumber) {
+    try {
+        console.log(`🔐 Generating pairing code for: ${phoneNumber}`);
+        
+        if (!sock || !isConnected) {
+            return { error: "Bot not connected. Start bot first." };
+        }
+        
+        // Remove any non-digits
+        const cleanNumber = phoneNumber.replace(/\D/g, '');
+        
+        // Must be international format
+        const formattedNumber = cleanNumber.startsWith('255') ? cleanNumber : `255${cleanNumber}`;
+        
+        // Request OFFICIAL pairing code
+        const code = await sock.requestPairingCode(formattedNumber);
+        
+        console.log(`✅ Generated code: ${code}`);
+        
+        return {
+            success: true,
+            code: code,
+            number: formattedNumber,
+            expiresIn: "60 seconds",
+            instructions: [
+                "1. Open WhatsApp on your phone",
+                "2. Go to Settings > Linked Devices",
+                "3. Tap 'Link a Device'",
+                `4. Enter this 8-digit code: ${code}`
+            ]
+        };
+        
+    } catch (error) {
+        console.log("❌ Pairing error:", error.message);
+        return {
+            error: error.message,
+            solution: "Make sure bot is connected and number is valid"
+        };
+    }
 }
 
-// EXPRESS ROUTES
+// Web Interface Routes
 app.get("/", (req, res) => {
-    const status = isConnected ? "🟢 CONNECTED" : "🔴 DISCONNECTED";
     res.send(`
         <!DOCTYPE html>
         <html>
         <head>
-            <title>WRONG TURN 6 - SECURE PANEL</title>
+            <title>WRONG TURN 6</title>
             <style>
-                body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #00ff00; padding: 20px; }
-                .status { padding: 10px; border: 2px solid #00ff00; border-radius: 5px; margin: 10px 0; }
-                .connected { border-color: #00ff00; }
-                .disconnected { border-color: #ff0000; }
-                a { color: #00ff00; text-decoration: none; }
-                .container { max-width: 800px; margin: 0 auto; }
-                .terminal { background: #000; padding: 20px; border-radius: 5px; }
-                h1 { color: #ff0000; }
+                body { font-family: Arial; padding: 20px; }
+                .status { padding: 10px; border-radius: 5px; }
+                .online { background: #28a745; color: white; }
+                .offline { background: #dc3545; color: white; }
             </style>
         </head>
         <body>
-            <div class="container">
-                <h1>⚡ WRONG TURN 6 CONTROL PANEL ⚡</h1>
-                <div class="terminal">
-                    <div class="status ${isConnected ? 'connected' : 'disconnected'}">
-                        <h2>STATUS: ${status}</h2>
-                    </div>
-                    <p><strong>👑 OWNER:</strong> ${config.ownerName}</p>
-                    <p><strong>🔐 SECURITY LEVEL:</strong> MAXIMUM</p>
-                    <p><strong>📊 COMMANDS:</strong> ${global.commands.size}</p>
-                    <p><strong>💾 DATABASE:</strong> ENCRYPTED FIREBASE</p>
-                    
-                    <h3>⚙️ QUICK ACTIONS:</h3>
-                    <ul>
-                        <li><a href="/pair">🔗 GET PAIRING CODE</a></li>
-                        <li><a href="/restart">🔄 RESTART BOT</a></li>
-                        <li><a href="/settings">⚙️ VIEW SETTINGS</a></li>
-                        <li><a href="/logs">📝 VIEW LOGS</a></li>
-                    </ul>
-                    
-                    <h3>🔧 PAIR DEVICE:</h3>
-                    <form action="/pair" method="GET">
-                        <input type="text" name="number" value="${config.ownerNumber.replace('@s.whatsapp.net', '')}" 
-                               style="background: #000; color: #00ff00; border: 1px solid #00ff00; padding: 5px;">
-                        <button type="submit" style="background: #000; color: #00ff00; border: 1px solid #00ff00; padding: 5px;">
-                            GET CODE
-                        </button>
-                    </form>
-                    
-                    <h3>🔒 SECURITY FEATURES:</h3>
-                    <ul>
-                        <li>✅ Anti-Delete Message Capture</li>
-                        <li>✅ Anti-Link Protection</li>
-                        <li>✅ Anti-Porn Detection</li>
-                        <li>✅ Swear Word Filter</li>
-                        <li>✅ View-Once Media Capture</li>
-                        <li>✅ Auto Status View</li>
-                        <li>✅ Auto Typing Presence</li>
-                        <li>✅ Encrypted Database</li>
-                    </ul>
-                </div>
+            <h1>🤖 WRONG TURN 6 BOT</h1>
+            <div class="status ${isConnected ? 'online' : 'offline'}">
+                Status: ${isConnected ? '🟢 ONLINE' : '🔴 OFFLINE'}
             </div>
+            <p>Owner: ${config.ownerName}</p>
+            
+            <h3>🔐 Get Pairing Code:</h3>
+            <form action="/pair" method="GET">
+                <input type="text" name="number" placeholder="255618558502" required>
+                <button type="submit">Generate Code</button>
+            </form>
+            
+            <h3>📱 Quick Actions:</h3>
+            <a href="/restart">🔄 Restart Bot</a> |
+            <a href="/status">📊 Status</a>
         </body>
         </html>
     `);
 });
 
 app.get("/pair", async (req, res) => {
-    const number = req.query.number || config.ownerNumber.replace('@s.whatsapp.net', '');
+    const number = req.query.number;
     
     if (!number) {
         return res.send("❌ Phone number required");
     }
     
-    const result = await getPairingCode(number);
+    const result = await generatePairingCode(number);
     
     if (result.success) {
         res.send(`
@@ -428,41 +402,41 @@ app.get("/pair", async (req, res) => {
             <head>
                 <title>Pairing Code</title>
                 <style>
-                    body { font-family: monospace; background: #000; color: #00ff00; padding: 20px; }
-                    .code { font-size: 32px; letter-spacing: 5px; padding: 20px; border: 2px dashed #00ff00; margin: 20px 0; }
+                    body { font-family: monospace; }
+                    .code { font-size: 32px; font-weight: bold; color: #28a745; }
                 </style>
             </head>
             <body>
-                <h1>🔐 PAIRING CODE</h1>
-                <p>For: ${number}</p>
+                <h1>🔐 WHATSAPP PAIRING CODE</h1>
+                <p>For: ${result.number}</p>
                 <div class="code">${result.code}</div>
                 <p>⏰ Expires in 60 seconds</p>
+                
+                <h3>📱 Instructions:</h3>
                 <ol>
-                    <li>Open WhatsApp on phone</li>
-                    <li>Settings → Linked Devices</li>
-                    <li>Tap "Link a Device"</li>
-                    <li>Enter code: <strong>${result.code}</strong></li>
+                    ${result.instructions.map(i => `<li>${i}</li>`).join('')}
                 </ol>
-                <p><a href="/">← BACK</a></p>
+                
+                <p><a href="/">← Back</a></p>
             </body>
             </html>
         `);
     } else {
-        res.send(`❌ Error: ${result.error}`);
+        res.send(`❌ Error: ${result.error || result.solution}`);
     }
 });
 
 app.get("/restart", async (req, res) => {
     try {
         if (sock) {
-            await sock.ws.close();
+            sock.ws.close();
         }
         setTimeout(async () => {
             await connectToWhatsApp();
             res.redirect("/");
         }, 3000);
     } catch (error) {
-        res.send(`❌ Error: ${error.message}`);
+        res.send(`Error: ${error.message}`);
     }
 });
 
@@ -470,9 +444,8 @@ app.get("/restart", async (req, res) => {
 const PORT = config.port || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server: http://localhost:${PORT}`);
-    console.log(`🔥 Security: Maximum Level Enabled`);
-    initBot();
+    loadCommands();
+    connectToWhatsApp();
 });
 
-// Export
-module.exports = { sock, isConnected, connectToWhatsApp, getPairingCode };
+module.exports = { sock, isConnected };
