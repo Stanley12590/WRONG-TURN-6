@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: wrongturn6-bot
+    env: node
+    buildCommand: npm install --legacy-peer-deps
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 18.17.0
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=4096
+    healthCheckPath: /
+    autoDeploy: true
